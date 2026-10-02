@@ -155,6 +155,81 @@ clients do not present the default as the model's opinion (the UI marks it "esti
 Accepted spellings are `72`, `"72"`, `"72%"` and the fraction `0.85`; anything else is treated as
 unusable rather than guessed at.
 
+## Feedback loop: technicians improve the knowledge base
+
+The knowledge base does not have to stay frozen at its 28 seed examples. Every diagnosis is a
+**ticket** that starts `pending`; a technician reviews it on the History page, and a reviewed case
+is added to ChromaDB, so the next *similar* report can retrieve it.
+
+```
+ diagnose ──► ticket (pending) ──► technician reviews ──┬─ Confirm ──► verified record = the AI's diagnosis
+                                                        └─ Correct ──► verified record = the technician's root cause + fix
+                                                                              │
+              next similar report ◄── retrieves it (as a close match) ◄───────┘
+```
+
+**Review status and priority** (new `review_status` / `review_priority` on every ticket):
+
+| Field | Values | Meaning |
+|---|---|---|
+| `review_status` | `pending` / `confirmed` / `corrected` | `pending` until a technician acts. Never moves back to pending |
+| `review_priority` | `high` / `low` | Set when the ticket is created: `high` for medium/high severity, `low` otherwise. Only affects ordering: the **Needs review** list shows high-priority tickets first |
+
+**Transitions:** `pending → confirmed`, `pending → corrected`, `confirmed → corrected`, and
+`corrected → corrected` (edit). Confirming twice is harmless; confirming a *corrected* ticket is
+refused (`409`). A correction stores the technician's root cause and fix **next to** the original AI
+diagnosis, which is never overwritten, so the two can be compared (History → *Show details*).
+
+**Endpoints**
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/v1/tickets/{id}/confirm` | Confirm the AI was right; adds the AI's diagnosis to the knowledge base. Body optional: `{equipment_type}` |
+| POST | `/api/v1/tickets/{id}/correct` | `{root_cause, recommended_fix, equipment_type?}`; adds the *corrected* case |
+| GET | `/api/v1/knowledge-base/stats` | `{total, seed, verified, verified_confirmed, verified_corrected}`: makes the growth visible |
+| GET | `/api/v1/history?review_status=pending` | Filter by status (`pending` lists high priority first). The History page shows the counts and filters |
+
+**What a verified record looks like.** It is matched on the technician's *report text* (as seed records
+are), carries the answer (confirmed: the AI's; corrected: the technician's), and is marked
+`source: "verified"` in its metadata (seed records are `seed`). Retrieved cases expose this as
+`similar_cases[].source`, and the UI shows a "Verified by a technician" chip. The record id is
+`VC-<ticket>-<hex>`. Photo tickets are matched by the AI's visual description (a file name is not a
+symptom report). A quick thumbs up/down is *not* a review and never adds anything.
+
+**Measured on the real system** (Groq + ONNX embeddings): a report about a laptop battery had no
+close match (retrieval 0.27, `general_reasoning`). After a technician confirmed it, a *differently
+worded* report of the same problem retrieved that case as its top match at **0.83** and was answered
+from `similar_cases`. A corrected forklift case was retrieved for a similar report at 0.88, with the
+technician's root cause and fix. An unconfirmed ticket was never retrieved.
+
+**Consistency guarantees**
+* A re-seed (`python -m app.db.seed`, or the auto-seed on startup) only ever touches **seed** records;
+  verified ones are left alone (the old clean-up would have deleted them: now covered by a regression test).
+* The record is written to ChromaDB **first** and the database committed second; if the vector store
+  fails, the ticket stays `pending` and the API answers 503, and if the commit fails the new record is
+  removed again.
+* The database is the source of truth: at startup, any reviewed ticket whose record is missing from
+  the vector store (a deleted `chroma_db`, a wiped disk) is **restored** from its ticket.
+* Older databases are upgraded in place at startup (`ALTER TABLE ... ADD COLUMN`, logged as
+  `schema_column_added`); no need to delete `servicediagnose.db`.
+
+**Limitations (read before relying on it)**
+* **No safeguard against a wrong confirmation.** One click makes a case "verified" and it immediately
+  influences retrieval *and* the answers the LLM writes. A technician confirming a bad diagnosis (or
+  typing a wrong correction) pollutes the knowledge base, and there is no undo or removal yet.
+* **No identity or roles:** anyone who can open the History page can confirm or correct, and the
+  reviewer is not recorded.
+* **Near-duplicates accumulate:** confirming five reports of the same fault adds five records.
+* Verified records without an equipment type are matched on the report text alone.
+* **Hosting:** on a free Render instance both the database and the vector store are wiped on restart,
+  so verified cases do not survive there. The restore step only helps when the database persists
+  (e.g. hosted PostgreSQL).
+
+**Planned improvements:** require **two independent confirmations** (or agreement between a
+confirmation and the AI) before a case is trusted, and weight or flag single-reviewer cases;
+record the reviewer and add roles; let an admin retract a verified case; merge near-duplicates;
+keep an audit trail of changes.
+
 ## Image analysis
 
 `POST /api/v1/diagnose-image` sends an uploaded photo to a **vision-language model**, which describes
@@ -206,6 +281,66 @@ and it read the text in the picture; a bird on a rusty pipe -> *not equipment*, 
   are not allowed to share.
 * The UI labels it *AI-generated visual assessment, not a substitute for professional inspection*.
 
+## Rate limiting
+
+`/api/v1/diagnose` and `/api/v1/diagnose-image` are limited to **10 requests per minute per client**
+(`RATE_LIMIT_PER_MINUTE`, window `RATE_LIMIT_WINDOW_SECONDS` = 60). Both endpoints spend your Groq quota
+and share one allowance per client. `/history`, `/stats`, `/health` and the review endpoints are not limited.
+
+Over the limit the API answers **`429`** with a `Retry-After` header and the usual error shape:
+
+```json
+{ "error": { "code": "rate_limited", "message": "Too many requests. Please wait 42 seconds and try again.", "request_id": "..." } }
+```
+
+The web app turns that into "Too many requests, please wait a moment (about 42 seconds) and try again."
+
+* **How it works:** an in-memory *sliding window*: each client's recent request times are kept and a
+  request is allowed if fewer than the limit happened in the last 60 s. Space frees up one request at a
+  time (no "everything resets at :00" burst). Refused requests are not counted, so retrying cannot extend
+  the wait. No Redis, no new dependency; about 60 lines in `app/core/rate_limit.py`, with an injectable
+  clock so the tests move time instead of sleeping. `RATE_LIMIT_PER_MINUTE=0` turns it off.
+* **Who is "a client" (`RATE_LIMIT_PROXY_HOPS`):** by default the IP of the TCP connection. Behind a
+  reverse proxy such as Render every connection comes from the proxy, so the real client is read from
+  `X-Forwarded-For`. Each proxy *appends* to that header and a caller can send its own first value, so only
+  entries on the **right** can be trusted: `RATE_LIMIT_PROXY_HOPS=N` means "the last N entries were added
+  by proxies I trust". `render.yaml` sets **1**. Set it too low and clients merely share a bucket (safe);
+  too high and a client could invent its own address and dodge the limit. If the header has fewer entries
+  than expected, the connection address is used. Each new client is logged as `rate_limit_new_client`
+  with the key that was derived, so you can check what the limiter sees on the real deployment.
+* **Limitations:** counters live in one process's memory, so a restart (including Render's spin-down)
+  forgets them and several instances would each count separately. It protects your API quota; it is not
+  a defence against a determined distributed attack, and one office behind a shared IP shares one allowance.
+
+## Statistics
+
+`GET /api/v1/stats` (the **Stats** page in the web app) summarises usage and the knowledge base's growth:
+
+```json
+{ "total_diagnoses_performed": 12, "text_diagnoses": 10, "image_diagnoses": 2,
+  "resolution": { "counted": 10, "similar_cases": 6, "general_reasoning": 4,
+                  "similar_cases_pct": 60.0, "general_reasoning_pct": 40.0 },
+  "knowledge_base_size": 31, "original_seed_count": 28, "technician_verified_count": 3,
+  "review": { "pending": 8, "confirmed": 2, "corrected": 2 },
+  "average_confidence": { "retrieval": 0.512, "llm": 0.81, "image": 0.9 } }
+```
+
+* **`total_diagnoses_performed`** counts stored tickets. Inputs rejected as "not an equipment issue" are
+  answered but never stored (see above), so they are not counted, the same rule as `/history`.
+* **`resolution`** covers *text* diagnoses: `similar_cases` means retrieval found a close match that was
+  handed to the LLM as examples, `general_reasoning` means nothing matched and the LLM used general
+  knowledge. Tickets saved before this was recorded have no basis and are left out of `counted` rather
+  than guessed. A percentage is `null` (not 0) when nothing has been counted.
+* **`knowledge_base_size`** is every record retrieval can find: `original_seed_count` plus
+  `technician_verified_count`. These three are `null` if the vector store cannot be read; the usage
+  numbers are still returned.
+* **Averages** (0-1) are over rows that have a value: the retrieval average is over text tickets, the
+  LLM average skips diagnoses where the model gave no usable number (it is not counted as 0), and photo
+  confidence is its own average because it is a different kind of number.
+* Tickets keep the counters in the SQL database (`diagnosis_basis`, `llm_confidence`); they are
+  computed with SQL aggregates on each request, which is fine at this scale. Like the rest of the
+  ticket data they reset when Render's free disk does.
+
 ## Endpoints
 
 | Method | Path | Purpose |
@@ -213,12 +348,16 @@ and it read the text in the picture; a bird on a rusty pipe -> *not equipment*, 
 | POST | `/api/v1/diagnose` | RAG diagnosis from a text description (stored as a ticket) |
 | POST | `/api/v1/diagnose-image` | AI visual assessment of an equipment photo by a vision-language model (see [Image analysis](#image-analysis)) |
 | GET | `/api/v1/history` | Paginated past tickets, newest first (`page`, `page_size`) |
-| POST | `/api/v1/feedback` | `{ticket_id, was_correct}`; resubmitting updates the earlier answer |
+| POST | `/api/v1/feedback` | `{ticket_id, was_correct}`; a quick thumbs up/down (analytics only; adds nothing to the knowledge base) |
+| POST | `/api/v1/tickets/{id}/confirm`, `/correct` | Technician review: adds the case to the knowledge base (see [Feedback loop](#feedback-loop-technicians-improve-the-knowledge-base)) |
+| GET | `/api/v1/knowledge-base/stats` | Seed vs technician-verified record counts |
+| GET | `/api/v1/stats` | Usage and knowledge-base growth: totals, similar-case vs general-reasoning split, average confidences (see [Statistics](#statistics)) |
 | GET | `/health` | Database, vector store and LLM status (503 if any is down) |
 | GET | `/health/live` | Liveness only: always 200 while the process is up (use as the host's health check) |
 
 Every error has the same shape, `{"error": {"code", "message", "details?", "request_id?"}}`:
-`422` validation (with per-field messages), `404` unknown ticket, `503` LLM unavailable or
+`422` validation (with per-field messages), `404` unknown ticket, `429` rate limited (with
+`Retry-After`), `503` LLM unavailable or
 knowledge base not seeded, `502` unusable LLM output, `500` unexpected (generic message plus a
 `request_id` for finding the log entry; stack traces are only ever logged).
 
@@ -244,6 +383,9 @@ All settings are environment variables (or `.env`); see [.env.example](.env.exam
 | `VISION_MAX_TOKENS` / `VISION_TIMEOUT_SECONDS` | `1024` / `60` | Output cap / request limit |
 | `GROQ_VISION_REASONING_EFFORT` | *(empty)* | Optional; not sent when empty |
 | `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated browser origins allowed by CORS. Production: the frontend URL |
+| `RATE_LIMIT_PER_MINUTE` | `10` | Requests per client per window on the two AI endpoints; `0` disables (see Rate limiting) |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Length of that window |
+| `RATE_LIMIT_PROXY_HOPS` | `0` | Trusted proxies in front of the app (0 = use the connection address; `render.yaml` sets 1) |
 | `AUTO_SEED_ON_STARTUP` | `true` | Rebuild the knowledge base at boot if it is empty (ephemeral hosts) |
 | `EMBEDDING_BACKEND` | `onnx` | `onnx` (about 210 MB RAM) or `sentence-transformers` (PyTorch, about 750 MB; extra install) |
 | `LOW_CONFIDENCE_THRESHOLD` | `0.50` | Minimum similarity for a "close match" |
@@ -268,7 +410,8 @@ response, prompt building and LLM-output parsing, the Ollama adapter against a f
 key-redaction cases), the vision adapter against a faked HTTP layer (inline base64 image, output
 parsing, every failure mode, never logging the image), the photo endpoint with a fake vision model, settings and secrets handling, CORS (allowed, blocked, preflight, error
 responses), start-up auto-seeding on an empty disk, the RAG routing logic with a faked LLM, seeding
-idempotency, and the API through FastAPI's `TestClient`. The integration tests
+idempotency, the rate limiter (a fake clock moves time, so no test sleeps) and the statistics
+arithmetic and endpoint, and the API through FastAPI's `TestClient`. The integration tests
 check real retrieval and that the similarity threshold still separates known from unknown issues.
 
 ## Design notes and limitations
@@ -293,10 +436,21 @@ check real retrieval and that the similarity threshold still separates known fro
   heuristic nevertheless finds trouble words ("caught fire", "leaking"), the report is kept: wrongly
   discarding a real emergency is worse than keeping a junk ticket.
 * **Advisory only.** A 3B model can be wrong, so diagnoses should be verified by a technician.
-* Tickets store the final diagnosis and retrieved cases but not `diagnosis_basis`/`note`.
-  Schema is created with `create_all`; use Alembic migrations for production.
-* No authentication or rate limiting yet: once deployed, anyone with the API URL can spend your
-  Groq quota.
+* Tickets store the final diagnosis, retrieved cases, `diagnosis_basis` and the LLM's confidence (the
+  latter two feed `/stats`) but not the `note` text.
+  Schema is created with `create_all` plus a small startup step that adds new columns to older databases; use
+  Alembic migrations for anything more involved.
+* **Abuse protection is basic.** The two AI endpoints are rate limited per client (see
+  [Rate limiting](#rate-limiting)), but there is no authentication: anyone with the API URL can still use
+  up to the limit, and the limiter's counters are in memory and per instance.
+* **ChromaDB sometimes leaves a freshly written record out of its search index.** Measured on
+  chromadb 1.5.9: roughly 1 in 8 single-record writes into an already-populated collection were stored
+  (`get(ids=...)` found them) yet missing from similarity results, which would have meant a confirmed case
+  silently never being retrieved. Re-writing the record fixed every case seen, so after each verified-case
+  write `KnowledgeBaseService` queries for it and re-writes it (up to 2 more times), logging
+  `knowledge_base_index_repaired`; if it still cannot be found it logs `knowledge_base_index_miss` and
+  keeps the review (the case also stays in the SQL ticket, so a restart restores it). Seed records were
+  never affected (0 of 150 fresh collections), and a test guards this against real ChromaDB.
 * **Embeddings use the ONNX runtime, not PyTorch.** Same model weights, identical vectors (cosine
   similarity 1.00000, same similarity scores, so the 0.50 threshold is unchanged), but about 210 MB
   of RAM instead of about 750 MB. Texts are embedded 4 at a time: embedding all 28 records in one
@@ -318,10 +472,10 @@ check real retrieval and that the similarity threshold still separates known fro
 app/
   api/        route handlers only (thin controllers) + dependency injection
   services/   diagnosis_service (RAG pipeline), llm_service, embedding_service,
-              severity, vision_service, ticket_service
+              severity, vision_service, ticket_service, review_service, knowledge_base_service
   models/     SQLAlchemy models        schemas/  Pydantic request/response models
   db/         engine/session, ChromaDB setup, seed script
-  core/       settings, structured JSON logging, exceptions
+  core/       settings, structured JSON logging, exceptions, in-memory rate limiter
 data/knowledge_base.json   28 synthetic issue records
 tests/
 ```
@@ -364,6 +518,8 @@ Environment variables:
 | `VISION_PROVIDER` / `GROQ_VISION_MODEL` | `groq` / `qwen/qwen3.8-27b` | Optional (defaults). Photo analysis reuses `GROQ_API_KEY` |
 | `EMBEDDING_BACKEND` | `onnx` | Optional (default); this is what makes it fit in 512 MB |
 | `AUTO_SEED_ON_STARTUP` | `true` | Optional (default) |
+| `RATE_LIMIT_PER_MINUTE` | `10` | Optional (default). Per client, on the two AI endpoints |
+| `RATE_LIMIT_PROXY_HOPS` | `1` | **Set this on Render** (the default 0 would make every visitor share one allowance, because all connections come from Render's proxy). See [Rate limiting](#rate-limiting) |
 | `DATABASE_URL` | `sqlite:///./servicediagnose.db` | Optional (default); ephemeral on the free tier |
 | `CHROMA_PERSIST_DIR` | `./chroma_db` | Optional (default); ephemeral on the free tier |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Unused in production; documented only |
@@ -387,7 +543,14 @@ The frontend URL is not known until step 2, so deploy the backend first with a p
 ```bash
 curl https://<your-service>.onrender.com/health/live    # {"status":"alive"}
 curl https://<your-service>.onrender.com/health         # llm "ok", knowledge_base_size 28
+curl https://<your-service>.onrender.com/api/v1/stats   # usage counters; knowledge_base_size 28 on a fresh start
 ```
+
+Then check the rate limiter sees real visitors: send one diagnosis from your browser and look in the Render
+logs for `rate_limit_new_client`. Its `client_key` should be **your public IP** (compare with
+`curl ifconfig.me`). If it is an address that stays the same for every visitor, `RATE_LIMIT_PROXY_HOPS` is
+too low (everyone shares one allowance, safe but strict); if it changes when you change the
+`X-Forwarded-For` header you send, it is too high.
 
 Then open the Vercel URL: the header pill should say "Backend online".
 

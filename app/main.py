@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import health
@@ -21,12 +22,15 @@ from app.api.v1.router import api_v1_router
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError
 from app.core.logging import request_id_ctx, setup_logging
+from app.core.rate_limit import RateLimiter
 from app.db.seed import seed_if_empty
 from app.db.session import create_db_engine, create_session_factory, init_db
+from app.models.ticket import Ticket
 from app.db.vector_store import create_chroma_client, get_or_create_collection
 from app.schemas.common import ErrorBody, ErrorResponse, FieldError
 from app.services.diagnosis_service import DiagnosisService
 from app.services.embedding_service import create_embedder
+from app.services.knowledge_base_service import KnowledgeBaseService
 from app.services.llm_service import create_llm_service
 from app.services.vision_service import create_vision_service
 
@@ -67,6 +71,17 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning("knowledge_base_empty", extra={"hint": "run `python -m app.db.seed` to load it"})
 
+    # Verified technician cases live in the vector store AND are recorded on their tickets. If the
+    # vector store was wiped (deleted folder, ephemeral disk) but the database survived, put them back.
+    session_factory = create_session_factory(engine)
+    knowledge_base = KnowledgeBaseService(collection, embedder)
+    try:
+        with session_factory() as session:
+            reviewed = session.scalars(select(Ticket).where(Ticket.kb_record_id.is_not(None))).all()
+            knowledge_base.restore_missing(reviewed)
+    except Exception:  # never block startup on this: reviews still work, and retrieval still has the seed
+        logger.exception("verified_cases_restore_failed")
+
     # The LLM adapter (Ollama or Groq) is chosen by LLM_PROVIDER; see llm_service.py.
     llm_service = create_llm_service(settings)
     logger.info(
@@ -82,7 +97,8 @@ async def lifespan(app: FastAPI):
     # real diagnosis is (usually) fast. (A no-op for Groq.) It never raises.
     threading.Thread(target=llm_service.warm_up, name="llm-warm-up", daemon=True).start()
 
-    app.state.session_factory = create_session_factory(engine)
+    app.state.session_factory = session_factory
+    app.state.knowledge_base = knowledge_base
     app.state.diagnosis_service = DiagnosisService(
         embedder=embedder,
         collection=collection,
@@ -108,11 +124,12 @@ def _error_response(
     message: str,
     details: list[FieldError] | None = None,
     request_id: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     body = ErrorResponse(
         error=ErrorBody(code=code, message=message, details=details, request_id=request_id)
     )
-    return JSONResponse(status_code=status_code, content=body.model_dump(exclude_none=True))
+    return JSONResponse(status_code=status_code, content=body.model_dump(exclude_none=True), headers=headers)
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -121,7 +138,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
         logger.warning("app_error", extra={"code": exc.code, "error_message": exc.message})
-        return _error_response(exc.status_code, exc.code, exc.message)
+        return _error_response(exc.status_code, exc.code, exc.message, headers=exc.headers)
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -166,6 +183,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+    # In-memory rate limiter (created here, not in the lifespan, so it exists in every context).
+    app.state.rate_limiter = RateLimiter(settings.rate_limit_per_minute, settings.rate_limit_window_seconds)
 
     @app.middleware("http")
     async def request_context(request: Request, call_next):
@@ -201,7 +220,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=settings.cors_origins,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Content-Type", "X-Request-ID"],
-        expose_headers=["X-Request-ID"],
+        expose_headers=["X-Request-ID", "Retry-After"],  # lets the browser app read how long to wait
         max_age=600,
     )
 

@@ -1,4 +1,5 @@
 import { toPercent } from '../lib/format'
+import { CheckCircleIcon } from './icons'
 import type { SimilarCase } from '../types/api'
 
 export function SimilarCaseCard({ item }: { item: SimilarCase }) {
@@ -12,6 +13,16 @@ export function SimilarCaseCard({ item }: { item: SimilarCase }) {
           <span className="font-semibold tabular-nums text-slate-800">{toPercent(item.similarity_score)}%</span> similar
         </span>
       </div>
+      {item.source === 'verified' && (
+        <p
+          className="mt-2 inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-900 ring-1 ring-inset ring-accent-500/40"
+          data-testid="verified-chip"
+          title="Added to the knowledge base from a ticket a technician confirmed or corrected"
+        >
+          <CheckCircleIcon className="h-3 w-3" />
+          Verified by a technician
+        </p>
+      )}
       <p className="mt-2 text-sm text-slate-800">{item.issue_description}</p>
       <details className="mt-2 text-sm">
         <summary className="cursor-pointer select-none text-xs font-medium text-accent-700 hover:underline">

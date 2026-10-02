@@ -6,12 +6,17 @@
  */
 import type {
   ApiErrorBody,
+  CorrectionInput,
   DiagnoseResponse,
   FeedbackResponse,
   FieldError,
   HealthResponse,
   HistoryPage,
   ImageDiagnoseResponse,
+  KnowledgeBaseStats,
+  ReviewResponse,
+  ReviewStatus,
+  StatsResponse,
 } from '../types/api'
 
 // Empty by default => same origin, which Vite proxies to the backend (see vite.config.ts).
@@ -35,11 +40,19 @@ export class ApiError extends Error {
   code?: string
   details: FieldError[]
   requestId?: string
+  /** From the Retry-After header of a 429: how long until the client may try again. */
+  retryAfterSeconds?: number
 
   constructor(
     kind: ApiErrorKind,
     message: string,
-    extra: { status?: number; code?: string; details?: FieldError[]; requestId?: string } = {},
+    extra: {
+      status?: number
+      code?: string
+      details?: FieldError[]
+      requestId?: string
+      retryAfterSeconds?: number
+    } = {},
   ) {
     super(message)
     this.name = 'ApiError'
@@ -48,6 +61,12 @@ export class ApiError extends Error {
     this.code = extra.code
     this.details = extra.details ?? []
     this.requestId = extra.requestId
+    this.retryAfterSeconds = extra.retryAfterSeconds
+  }
+
+  /** The server refused because this client sent too many requests (HTTP 429). */
+  get rateLimited(): boolean {
+    return this.status === 429
   }
 
   /** Worth offering a "Try again" button for. */
@@ -66,7 +85,14 @@ function isErrorBody(payload: unknown): payload is ApiErrorBody {
   return typeof error === 'object' && error !== null && typeof error.message === 'string'
 }
 
-function toApiError(status: number, payload: unknown): ApiError {
+/** "Retry-After: 12" -> 12. Anything else (missing, HTTP-date, junk) -> undefined. */
+function parseRetryAfter(value: string | null | undefined): number | undefined {
+  const seconds = Number(value)
+  return value && Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : undefined
+}
+
+function toApiError(status: number, payload: unknown, retryAfter?: string | null): ApiError {
+  const retryAfterSeconds = status === 429 ? parseRetryAfter(retryAfter) : undefined
   if (isErrorBody(payload)) {
     const { code, message, details, request_id } = payload.error
     return new ApiError(status === 422 ? 'validation' : 'server', message, {
@@ -74,7 +100,12 @@ function toApiError(status: number, payload: unknown): ApiError {
       code,
       details,
       requestId: request_id,
+      retryAfterSeconds,
     })
+  }
+  // A 429 without our JSON envelope (e.g. from a gateway) is still "slow down", not a crash.
+  if (status === 429) {
+    return new ApiError('server', 'Too many requests.', { status, retryAfterSeconds })
   }
   // A 5xx with no JSON envelope did not come from our backend: it is the dev proxy (or a
   // gateway) saying the backend is unreachable.
@@ -129,7 +160,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
       if (payload === undefined) throw toApiError(500, undefined)
       return payload as T
     }
-    throw toApiError(response.status, payload)
+    throw toApiError(response.status, payload, response.headers.get('Retry-After'))
   } catch (err) {
     if (err instanceof ApiError) throw err
     if (timedOut) {
@@ -165,8 +196,38 @@ export function diagnoseImage(file: File, signal?: AbortSignal): Promise<ImageDi
   })
 }
 
-export function getHistory(page: number, pageSize: number, signal?: AbortSignal): Promise<HistoryPage> {
-  return request<HistoryPage>(`/api/v1/history?page=${page}&page_size=${pageSize}`, { signal })
+export function getHistory(
+  page: number,
+  pageSize: number,
+  signal?: AbortSignal,
+  reviewStatus?: ReviewStatus,
+): Promise<HistoryPage> {
+  const filter = reviewStatus ? `&review_status=${reviewStatus}` : ''
+  return request<HistoryPage>(`/api/v1/history?page=${page}&page_size=${pageSize}${filter}`, { signal })
+}
+
+/** The technician agrees with the AI. Adds the case to the knowledge base. */
+export function confirmTicket(ticketId: number, signal?: AbortSignal): Promise<ReviewResponse> {
+  return request<ReviewResponse>(`/api/v1/tickets/${ticketId}/confirm`, { method: 'POST', signal })
+}
+
+/** The technician supplies the real root cause and fix. Adds the corrected case to the knowledge base. */
+export function correctTicket(
+  ticketId: number,
+  correction: CorrectionInput,
+  signal?: AbortSignal,
+): Promise<ReviewResponse> {
+  return request<ReviewResponse>(`/api/v1/tickets/${ticketId}/correct`, { method: 'POST', json: correction, signal })
+}
+
+/** How many knowledge-base records are seed vs technician-verified. */
+export function getKnowledgeBaseStats(signal?: AbortSignal): Promise<KnowledgeBaseStats> {
+  return request<KnowledgeBaseStats>('/api/v1/knowledge-base/stats', { signal })
+}
+
+/** Usage numbers and knowledge-base growth for the Stats page. */
+export function getStats(signal?: AbortSignal): Promise<StatsResponse> {
+  return request<StatsResponse>('/api/v1/stats', { signal })
 }
 
 export function submitFeedback(

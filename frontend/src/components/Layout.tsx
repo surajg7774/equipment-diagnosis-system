@@ -25,6 +25,9 @@ export function Layout() {
             <NavLink to="/history" className={linkClass}>
               History
             </NavLink>
+            <NavLink to="/stats" className={linkClass}>
+              Stats
+            </NavLink>
           </nav>
           <div className="ml-auto">
             <HealthStatus />

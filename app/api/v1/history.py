@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query, Response, status
 
 from app.api.deps import TicketServiceDep
 from app.schemas.common import ErrorResponse
+from app.schemas.enums import ReviewStatus
 from app.schemas.history import FeedbackRequest, FeedbackResponse, HistoryItem, HistoryPage
 
 router = APIRouter(tags=["History & Feedback"])
@@ -21,8 +22,12 @@ def list_history(
     tickets: TicketServiceDep,
     page: Annotated[int, Query(ge=1, description="Page number, starting at 1.")] = 1,
     page_size: Annotated[int, Query(ge=1, le=100, description="Items per page (max 100).")] = 20,
+    review_status: Annotated[
+        ReviewStatus | None,
+        Query(description="Only tickets in this review state. 'pending' lists medium/high severity first."),
+    ] = None,
 ) -> HistoryPage:
-    items, total, total_pages = tickets.list_tickets(page, page_size)
+    items, total, total_pages = tickets.list_tickets(page, page_size, review_status)
     return HistoryPage(
         items=[HistoryItem.model_validate(t) for t in items],
         total=total,

@@ -118,6 +118,15 @@ class Settings(BaseSettings):
     # so an empty knowledge base is re-seeded from knowledge_base_path at startup.
     auto_seed_on_startup: bool = True
 
+    # --- Abuse protection: per-client rate limit on the AI endpoints ----------------
+    # /diagnose and /diagnose-image share one bucket per client (each call spends Groq quota).
+    # 0 disables the limiter.
+    rate_limit_per_minute: int = Field(default=10, ge=0)
+    rate_limit_window_seconds: float = Field(default=60.0, gt=0)
+    # How many TRUSTED reverse-proxy entries the X-Forwarded-For header ends with (see
+    # app/core/rate_limit.py). 0 = ignore the header (local use). On Render start with 1.
+    rate_limit_proxy_hops: int = Field(default=0, ge=0, le=5)
+
     @property
     def cors_origins(self) -> list[str]:
         """ALLOWED_ORIGINS as a clean list ("*" allowed; trailing slashes removed)."""

@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from app.api.deps import get_db, get_diagnosis_service, get_vision_service
+from app.api.deps import get_db, get_diagnosis_service, get_knowledge_base_service, get_vision_service
 from app.core.config import Settings
 from app.db.base import Base
 from app.db.seed import load_records, seed_knowledge_base
@@ -29,6 +29,7 @@ from app.db.vector_store import get_or_create_collection
 from app.main import create_app
 from app.schemas.enums import Severity
 from app.services.diagnosis_service import DiagnosisService
+from app.services.knowledge_base_service import KnowledgeBaseService
 from app.services.llm_service import LLMDiagnosis, LLMService
 from app.services.vision_service import VisionAnalysis, VisionService
 
@@ -154,8 +155,15 @@ def db_session_factory():
 
 
 @pytest.fixture
-def app(db_session_factory, seeded_collection, fake_embedder, fake_llm, fake_vision):
-    application = create_app(Settings(environment="testing", log_level="WARNING"))
+def knowledge_base(seeded_collection, fake_embedder) -> KnowledgeBaseService:
+    """Writes verified cases into the SAME collection the diagnosis service searches."""
+    return KnowledgeBaseService(seeded_collection, fake_embedder)
+
+
+@pytest.fixture
+def app(db_session_factory, seeded_collection, fake_embedder, fake_llm, fake_vision, knowledge_base):
+    # A high limit: only the rate-limit tests care about throttling, and they build their own limiter.
+    application = create_app(Settings(environment="testing", log_level="WARNING", rate_limit_per_minute=1000))
     # Threshold 0.2 (not the production 0.5): the fake embedder's scores are on a
     # different scale from the real model's. Related text scores well above 0.2,
     # made-up words score ~0.
@@ -177,6 +185,7 @@ def app(db_session_factory, seeded_collection, fake_embedder, fake_llm, fake_vis
     application.dependency_overrides[get_db] = override_get_db
     application.dependency_overrides[get_diagnosis_service] = lambda: service
     application.dependency_overrides[get_vision_service] = lambda: fake_vision
+    application.dependency_overrides[get_knowledge_base_service] = lambda: knowledge_base
     return application
 
 

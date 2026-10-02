@@ -11,10 +11,23 @@ class AppError(Exception):
 
     status_code: int = 400
     code: str = "app_error"
+    headers: dict[str, str] | None = None  # extra response headers (e.g. Retry-After)
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class RateLimitedError(AppError):
+    """The client sent too many requests recently."""
+
+    status_code = 429
+    code = "rate_limited"
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(f"Too many requests. Please wait {retry_after_seconds} seconds and try again.")
+        self.retry_after_seconds = retry_after_seconds
+        self.headers = {"Retry-After": str(retry_after_seconds)}  # standard header; clients/proxies understand it
 
 
 class TicketNotFoundError(AppError):
@@ -45,6 +58,20 @@ class LLMResponseError(AppError):
 
     status_code = 502
     code = "llm_bad_response"
+
+
+class ReviewConflictError(AppError):
+    """The requested review change is not allowed from the ticket's current status."""
+
+    status_code = 409
+    code = "review_conflict"
+
+
+class KnowledgeBaseUpdateError(AppError):
+    """The verified case could not be written to the vector store; nothing was saved."""
+
+    status_code = 503
+    code = "knowledge_base_unavailable"
 
 
 class VisionUnavailableError(AppError):

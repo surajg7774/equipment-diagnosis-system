@@ -84,3 +84,14 @@ export const CheckCircleIcon = (p: IconProps) => (
     <path d="m8.5 12.5 2.5 2.5 4.5-5" />
   </Icon>
 )
+export const PencilIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
+  </Icon>
+)
+export const DatabaseIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <ellipse cx="12" cy="5" rx="8" ry="3" />
+    <path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+  </Icon>
+)

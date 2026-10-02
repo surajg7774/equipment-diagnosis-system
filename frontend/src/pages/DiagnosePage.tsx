@@ -5,6 +5,7 @@ import { ImageUploadCard } from '../components/ImageUploadCard'
 import { InvalidResultCard, ResultCard } from '../components/ResultCard'
 import { ResultSkeleton } from '../components/ResultSkeleton'
 import { SpinnerIcon } from '../components/icons'
+import { EQUIPMENT_TYPES, type EquipmentType } from '../lib/equipment'
 import { useElapsedSeconds } from '../lib/useElapsedSeconds'
 import type { DiagnoseResponse } from '../types/api'
 
@@ -12,8 +13,6 @@ import type { DiagnoseResponse } from '../types/api'
 const MIN_LENGTH = 10
 const MAX_LENGTH = 2000
 
-const EQUIPMENT_TYPES = ['pump', 'motor', 'printer', 'HVAC', 'conveyor belt', 'generator'] as const
-type EquipmentType = (typeof EQUIPMENT_TYPES)[number]
 
 // The backend's diagnose endpoint accepts only a description (no equipment_type field), so the
 // dropdown is purely a UI hint: it changes the placeholder to suggest what to describe, and is

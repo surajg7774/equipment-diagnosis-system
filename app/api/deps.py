@@ -7,6 +7,7 @@ Chroma collection, the DB engine) are built once at startup and kept on
 replace them with ``app.dependency_overrides``.
 """
 
+import logging
 from collections.abc import Iterator
 from typing import Annotated
 
@@ -14,9 +15,16 @@ from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.exceptions import RateLimitedError
+from app.core.rate_limit import client_key
 from app.services.diagnosis_service import DiagnosisService
+from app.services.knowledge_base_service import KnowledgeBaseService
+from app.services.review_service import ReviewService
 from app.services.ticket_service import TicketService
 from app.services.vision_service import VisionService
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_settings_dep(request: Request) -> Settings:
@@ -43,8 +51,32 @@ def get_vision_service(request: Request) -> VisionService:
     return request.app.state.vision_service
 
 
+def enforce_rate_limit(request: Request) -> None:
+    """Dependency for the endpoints that spend LLM/vision quota. Raises 429 when over the limit."""
+    decision = request.app.state.rate_limiter.check(
+        client_key(request, request.app.state.settings.rate_limit_proxy_hops)
+    )
+    if not decision.allowed:
+        logger.warning(
+            "rate_limited",
+            extra={"path": request.url.path, "retry_after": decision.retry_after_seconds},
+        )
+        raise RateLimitedError(decision.retry_after_seconds)
+
+
 def get_ticket_service(db: Annotated[Session, Depends(get_db)]) -> TicketService:
     return TicketService(db)
+
+
+def get_knowledge_base_service(request: Request) -> KnowledgeBaseService:
+    return request.app.state.knowledge_base
+
+
+def get_review_service(
+    db: Annotated[Session, Depends(get_db)],
+    knowledge_base: Annotated[KnowledgeBaseService, Depends(get_knowledge_base_service)],
+) -> ReviewService:
+    return ReviewService(db, knowledge_base)
 
 
 # Annotated aliases keep route signatures short and readable.
@@ -53,3 +85,5 @@ DbDep = Annotated[Session, Depends(get_db)]
 DiagnosisServiceDep = Annotated[DiagnosisService, Depends(get_diagnosis_service)]
 VisionServiceDep = Annotated[VisionService, Depends(get_vision_service)]
 TicketServiceDep = Annotated[TicketService, Depends(get_ticket_service)]
+KnowledgeBaseDep = Annotated[KnowledgeBaseService, Depends(get_knowledge_base_service)]
+ReviewServiceDep = Annotated[ReviewService, Depends(get_review_service)]

@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.enums import Severity
+from app.schemas.enums import ReviewPriority, ReviewStatus, Severity
 
 
 class HistoryItem(BaseModel):
@@ -22,6 +22,12 @@ class HistoryItem(BaseModel):
     feedback_was_correct: bool | None = Field(
         default=None, description="Technician feedback, or null if none was given yet."
     )
+    review_status: ReviewStatus = Field(description="pending, confirmed or corrected by a technician.")
+    review_priority: ReviewPriority = Field(description="How urgently a pending ticket needs review.")
+    corrected_root_cause: str | None = Field(default=None, description="The technician's root cause, if corrected.")
+    corrected_fix: str | None = Field(default=None, description="The technician's fix, if corrected.")
+    reviewed_at: datetime | None = None
+    kb_record_id: str | None = Field(default=None, description="Knowledge-base record built from this ticket, if reviewed.")
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -50,6 +56,12 @@ class HistoryPage(BaseModel):
                             "recommended_action": "Shut down the pump, replace the bearings...",
                             "confidence_score": 0.74,
                             "feedback_was_correct": True,
+                            "review_status": "pending",
+                            "review_priority": "high",
+                            "corrected_root_cause": None,
+                            "corrected_fix": None,
+                            "reviewed_at": None,
+                            "kb_record_id": None,
                         }
                     ],
                     "total": 1,

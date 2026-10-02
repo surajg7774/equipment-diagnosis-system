@@ -45,6 +45,13 @@ services:
         value: onnx
       - key: AUTO_SEED_ON_STARTUP   # refill the knowledge base on boot (the free disk is wiped on restart)
         value: "true"
+      - key: RATE_LIMIT_PER_MINUTE  # per client, on /diagnose and /diagnose-image; 0 turns it off
+        value: "10"
+      # Render's proxy puts the caller's address into X-Forwarded-For. 1 = "trust the last entry".
+      # Too low only makes clients share a bucket; too high would let a client forge its address.
+      # After deploying, look for the `rate_limit_new_client` log lines (they show the key it derived).
+      - key: RATE_LIMIT_PROXY_HOPS
+        value: "1"
       # Both live on the ephemeral disk: tickets/feedback and the vector store reset whenever the
       # service restarts, redeploys or spins down. Fine for a demo; see README for durable options.
       - key: DATABASE_URL

@@ -5,7 +5,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, UploadFile
 
-from app.api.deps import DiagnosisServiceDep, SettingsDep, TicketServiceDep, VisionServiceDep
+from fastapi import Depends
+
+from app.api.deps import (
+    DiagnosisServiceDep,
+    SettingsDep,
+    TicketServiceDep,
+    VisionServiceDep,
+    enforce_rate_limit,
+)
 from app.schemas.common import ErrorResponse
 from app.schemas.diagnosis import DiagnoseRequest, DiagnoseResponse, ImageDiagnoseResponse
 from app.services.vision_service import MEDIA_TYPES, validate_image_bytes
@@ -16,6 +24,7 @@ router = APIRouter(tags=["Diagnosis"])
 
 @router.post(
     "/diagnose",
+    dependencies=[Depends(enforce_rate_limit)],
     response_model=DiagnoseResponse,
     summary="Diagnose an equipment issue from a text description",
     description=(
@@ -32,6 +41,7 @@ router = APIRouter(tags=["Diagnosis"])
     ),
     responses={
         422: {"model": ErrorResponse, "description": "Invalid request body."},
+        429: {"model": ErrorResponse, "description": "Too many requests from this client; see the Retry-After header."},
         502: {"model": ErrorResponse, "description": "The LLM returned an unusable response."},
         503: {
             "model": ErrorResponse,
@@ -61,6 +71,9 @@ def diagnose(
             recommended_action=result.recommended_action,
             confidence_score=result.retrieval_confidence,  # stored value: retrieval similarity
             similar_cases=result.similar_cases,
+            diagnosis_basis=result.diagnosis_basis.value,
+            # Only the model's real number: a defaulted 0.5 would pollute the average.
+            llm_confidence=None if result.llm_confidence_defaulted else result.llm_confidence,
         ).id
     return DiagnoseResponse(
         is_valid_issue=result.is_valid_issue,
@@ -80,6 +93,7 @@ def diagnose(
 
 @router.post(
     "/diagnose-image",
+    dependencies=[Depends(enforce_rate_limit)],
     response_model=ImageDiagnoseResponse,
     summary="AI visual assessment of an equipment photo",
     description=(
@@ -93,6 +107,7 @@ def diagnose(
         413: {"model": ErrorResponse, "description": "Image too large."},
         415: {"model": ErrorResponse, "description": "Not a JPEG/PNG/WebP image."},
         422: {"model": ErrorResponse, "description": "Missing, empty or unreadable image."},
+        429: {"model": ErrorResponse, "description": "Too many requests from this client; see the Retry-After header."},
         502: {"model": ErrorResponse, "description": "The vision model returned an unusable result."},
         503: {"model": ErrorResponse, "description": "Image analysis unavailable, disabled or rate limited."},
         500: {"model": ErrorResponse, "description": "Unexpected server error."},

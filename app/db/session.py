@@ -6,10 +6,14 @@ through the ``get_db`` dependency (``app/api/deps.py``).  That keeps the code
 free of module-level globals and lets tests substitute their own database.
 """
 
-from sqlalchemy import Engine, create_engine
+import logging
+
+from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
+
+logger = logging.getLogger(__name__)
 
 
 def create_db_engine(database_url: str) -> Engine:
@@ -39,3 +43,35 @@ def init_db(engine: Engine) -> None:
     from app.models import ticket  # noqa: F401
 
     Base.metadata.create_all(engine)
+    add_missing_columns(engine)
+
+
+def add_missing_columns(engine: Engine) -> list[str]:
+    """Add model columns that an older database file does not have yet; returns what was added.
+
+    ``create_all`` creates missing TABLES but never alters existing ones, so a database created
+    before a column was introduced would break. This bridges that gap for simple additive
+    changes (new nullable columns, or NOT NULL columns that have a server default). Anything
+    more involved (renames, type changes) still needs real migrations (Alembic).
+    """
+    added: list[str] = []
+    inspector = inspect(engine)
+    for table in Base.metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue
+        existing = {column["name"] for column in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in existing:
+                continue
+            ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {column.type.compile(dialect=engine.dialect)}'
+            if column.server_default is not None:
+                ddl += f" DEFAULT '{column.server_default.arg}'"
+                if not column.nullable:
+                    ddl += " NOT NULL"
+            elif not column.nullable:
+                continue  # cannot add a NOT NULL column without a default: leave it to a real migration
+            with engine.begin() as connection:
+                connection.execute(text(ddl))
+            added.append(f"{table.name}.{column.name}")
+            logger.info("schema_column_added", extra={"table": table.name, "column": column.name})
+    return added

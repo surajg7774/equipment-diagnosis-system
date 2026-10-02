@@ -56,13 +56,23 @@ def record_to_embedding_text(record: KnowledgeBaseRecord) -> str:
     and returned with the match, but are not embedded: they would pull the
     vector toward words the technician never typed.
     """
-    return f"{record.equipment_type}: {record.issue_description}"
+    return embedding_text(record.equipment_type, record.issue_description)
+
+
+def embedding_text(equipment_type: str | None, issue_description: str) -> str:
+    """"<type>: <symptoms>" when the equipment type is known, otherwise just the symptoms."""
+    if equipment_type and equipment_type.lower() != "unspecified":
+        return f"{equipment_type}: {issue_description}"
+    return issue_description
 
 
 def seed_knowledge_base(
     collection: Collection, embedder: Embedder, records: list[KnowledgeBaseRecord]
 ) -> SeedReport:
-    """Make ``collection`` contain exactly ``records`` (idempotent)."""
+    """Make the SEED part of ``collection`` match ``records`` exactly (idempotent).
+
+    Verified technician cases already in the collection are left untouched.
+    """
     ids = [r.id for r in records]
 
     if records:
@@ -71,11 +81,19 @@ def seed_knowledge_base(
             embeddings=embedder.embed([record_to_embedding_text(r) for r in records]),
             documents=[record_to_embedding_text(r) for r in records],
             # Chroma metadata must be flat str/int/float/bool values.
-            metadatas=[r.model_dump(mode="json") for r in records],
+            metadatas=[{**r.model_dump(mode="json"), "source": "seed"} for r in records],
         )
 
-    # Remove records that were deleted from the JSON file since the last run.
-    stale_ids = sorted(set(collection.get(include=[])["ids"]) - set(ids))
+    # Remove SEED records that were deleted from the JSON file since the last run.
+    # Records verified by technicians (source="verified") are real-world knowledge, not part of
+    # the seed file, so a re-seed must never touch them. (Records stored before the "source"
+    # field existed have none and count as seed.)
+    stored = collection.get(include=["metadatas"])
+    stale_ids = sorted(
+        record_id
+        for record_id, metadata in zip(stored["ids"], stored["metadatas"] or [])
+        if (metadata or {}).get("source", "seed") != "verified" and record_id not in set(ids)
+    )
     if stale_ids:
         collection.delete(ids=stale_ids)
 

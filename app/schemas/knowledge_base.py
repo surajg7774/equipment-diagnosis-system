@@ -1,5 +1,7 @@
 """Schemas for knowledge-base records and similarity-search hits."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from app.schemas.enums import Severity
@@ -16,6 +18,10 @@ class KnowledgeBaseRecord(BaseModel):
     root_cause: str = Field(examples=["Worn or failed bearings."])
     recommended_fix: str = Field(examples=["Replace the bearings and re-lubricate."])
     severity: Severity
+    source: Literal["seed", "verified"] = Field(
+        default="seed",
+        description="'seed' = shipped with the system; 'verified' = added from a technician-reviewed ticket.",
+    )
 
 
 class SimilarCase(KnowledgeBaseRecord):

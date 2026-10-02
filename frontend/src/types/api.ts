@@ -8,6 +8,15 @@ export type Severity = 'low' | 'medium' | 'high'
 /** What the diagnosis was grounded on. */
 export type DiagnosisBasis = 'similar_cases' | 'general_reasoning'
 
+/** Where a knowledge-base record came from. */
+export type KnowledgeBaseSource = 'seed' | 'verified'
+
+/** Where a ticket is in the technician-verification workflow. */
+export type ReviewStatus = 'pending' | 'confirmed' | 'corrected'
+
+/** How urgently a pending ticket needs review (medium/high severity first). */
+export type ReviewPriority = 'high' | 'low'
+
 /** A knowledge-base record returned by the similarity search. */
 export interface SimilarCase {
   id: string
@@ -18,6 +27,8 @@ export interface SimilarCase {
   severity: string
   /** Cosine similarity, 0-1. */
   similarity_score: number
+  /** 'verified' = added from a technician-reviewed ticket. Absent on older backends (= seed). */
+  source?: KnowledgeBaseSource
 }
 
 // --- POST /api/v1/diagnose ----------------------------------------------------
@@ -82,6 +93,14 @@ export interface HistoryItem {
   confidence_score: number
   /** Technician feedback, or null if none was given yet. */
   feedback_was_correct: boolean | null
+  review_status: ReviewStatus
+  review_priority: ReviewPriority
+  /** The technician's own root cause / fix, shown beside the AI's. Null unless corrected. */
+  corrected_root_cause: string | null
+  corrected_fix: string | null
+  reviewed_at: string | null
+  /** The knowledge-base record built from this ticket, once reviewed. */
+  kb_record_id: string | null
 }
 
 export interface HistoryPage {
@@ -104,6 +123,55 @@ export interface FeedbackResponse {
   ticket_id: number
   was_correct: boolean
   created_at: string
+}
+
+// --- Review workflow + knowledge-base statistics ---------------------------------------------
+export interface KnowledgeBaseStats {
+  total: number
+  seed: number
+  verified: number
+  verified_confirmed: number
+  verified_corrected: number
+}
+
+export interface CorrectionInput {
+  root_cause: string
+  recommended_fix: string
+  equipment_type?: string | null
+}
+
+export interface ReviewResponse {
+  ticket_id: number
+  review_status: ReviewStatus
+  review_priority: ReviewPriority
+  reviewed_at: string | null
+  corrected_root_cause: string | null
+  corrected_fix: string | null
+  added_to_knowledge_base: boolean
+  kb_record_id: string | null
+  knowledge_base: KnowledgeBaseStats
+}
+
+// --- GET /api/v1/stats ----------------------------------------------------------------------
+export interface StatsResponse {
+  total_diagnoses_performed: number
+  text_diagnoses: number
+  image_diagnoses: number
+  resolution: {
+    counted: number
+    similar_cases: number
+    general_reasoning: number
+    /** null when nothing has been counted yet (not 0%). */
+    similar_cases_pct: number | null
+    general_reasoning_pct: number | null
+  }
+  /** The three knowledge-base numbers are null if the vector store could not be read. */
+  knowledge_base_size: number | null
+  original_seed_count: number | null
+  technician_verified_count: number | null
+  review: { pending: number; confirmed: number; corrected: number }
+  /** 0-1 scale; null when there is nothing to average. */
+  average_confidence: { retrieval: number | null; llm: number | null; image: number | null }
 }
 
 // --- GET /health -------------------------------------------------------------------------

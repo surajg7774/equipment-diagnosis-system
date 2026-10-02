@@ -176,3 +176,42 @@ def test_real_llm_confidence_is_independent_of_how_well_the_knowledge_base_match
     assert result.retrieval_confidence < settings.low_confidence_threshold  # weak match...
     assert_llm_reported_a_sensible_confidence(result)  # ...but the model still reports its own certainty
     assert result.llm_confidence > result.retrieval_confidence  # the two scores genuinely differ
+
+
+# --- the human-in-the-loop feedback loop with REAL embeddings (no LLM needed) ---------------------
+def test_a_confirmed_case_becomes_a_close_match_for_a_reworded_report(embedder, collection):
+    """The point of the feature, measured with the real model against the real 0.50 threshold."""
+    from tests.test_review import make_ticket  # reuse the ticket helper
+
+    from app.services.knowledge_base_service import KnowledgeBaseService
+    from app.services.review_service import ReviewService
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app.db.base import Base
+    import app.models.ticket  # noqa: F401  (registers the tables)
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    kb = KnowledgeBaseService(collection, embedder)
+    service = DiagnosisService(embedder, collection, FakeLLMService(), settings.top_k, settings.low_confidence_threshold)
+
+    first = "laptop battery drains within an hour and the laptop shuts down at 30 percent"
+    reworded = "my laptop battery dies in under an hour and it powers off at around 30%"
+    unrelated = "conveyor belt is drifting to one side and scraping the frame"
+
+    before = service.find_similar_cases(reworded)[0]
+    assert before.similarity_score < settings.low_confidence_threshold  # nothing like it yet: general reasoning
+
+    ticket = make_ticket(session, description=first)
+    pending_view = service.find_similar_cases(reworded)[0]
+    assert pending_view.source == "seed"  # a pending ticket changes nothing
+
+    ReviewService(session, kb).confirm(ticket.id)
+
+    after = service.find_similar_cases(reworded)[0]
+    assert after.id == ticket.kb_record_id and after.source == "verified"
+    assert after.similarity_score >= settings.low_confidence_threshold  # now a CLOSE match
+    assert after.similarity_score > before.similarity_score + 0.3
+    assert service.find_similar_cases(unrelated)[0].source == "seed"  # and it does not leak into unrelated queries

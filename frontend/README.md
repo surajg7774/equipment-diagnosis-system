@@ -33,8 +33,17 @@ Other scripts: `npm run build` (type-check + production build), `npm run lint`.
     reasoning*; similar cases are listed below.
   * **Not an equipment issue** (`is_valid_issue: false`): a neutral message with the assistant's
     reply and a "No ticket created" notice. No severity, ticket id or confidence is rendered.
-* **History** (`/history`): paginated ticket table with thumbs up/down feedback per row,
-  expandable details and an empty state.
+* **History** (`/history`): paginated ticket table with a **Review** column: each ticket is *Pending review*
+  (medium/high severity marked "Review first"), *Confirmed* or *Corrected*. A technician can **Confirm** a
+  correct diagnosis or **Correct** it with the real root cause and fix (an inline form); either adds the case
+  to the knowledge base. *Show details* compares the AI's version with the technician's. A bar at the top
+  shows the knowledge base growing (seed vs verified records), and tabs filter by review status. Cases
+  retrieved on the Diagnose page that came from a technician carry a "Verified by a technician" chip.
+* **Stats** (`/stats`): a small dashboard fed by `GET /api/v1/stats`: stat cards for diagnoses performed,
+  the share resolved from similar cases, knowledge-base size and technician-verified cases, plus panels for
+  similar-case vs general-reasoning split, seed vs verified records, average confidences and review
+  progress. It has loading, error (with **Try again**) and empty states; a value the backend cannot give
+  (e.g. an average with nothing to average) shows "—", never a misleading 0.
 
 ## Structure
 
@@ -42,7 +51,7 @@ Other scripts: `npm run build` (type-check + production build), `npm run lint`.
 src/
   api/client.ts      typed fetch wrapper; every failure becomes an ApiError (network/timeout/validation/server)
   types/api.ts       TypeScript mirror of the backend contracts
-  pages/             DiagnosePage, HistoryPage
+  pages/             DiagnosePage, HistoryPage, StatsPage
   components/        ResultCard, BasisBanner, SeverityBadge, ConfidenceBar, FeedbackButtons, ...
   lib/               error-to-message mapping, formatting helpers
 ```
@@ -57,6 +66,10 @@ src/
   to the deprecated `confidence_score` and the AI tile is simply omitted.
 * Errors: unreachable backend and timeouts show a clear message with **Try again**; a 422's
   `error.details[].message` is shown inline on the form field.
+* **Rate limit (HTTP 429):** the backend allows 10 AI requests per minute per client. Past that the
+  app shows "Too many requests, please wait a moment (about N seconds) and try again" (N comes from the
+  `Retry-After` header, which the backend exposes to browsers via CORS) with a **Try again** button.
+  A refused request does not count against the limit, so retrying cannot make the wait longer.
 * Vite binds to `localhost` (IPv6 `::1` on some Windows setups): open <http://localhost:5173>
   rather than `127.0.0.1:5173`.
 

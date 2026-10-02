@@ -34,6 +34,18 @@ export function describeError(error: unknown): ErrorView {
         retryable: false,
       }
     default:
+      // Rate limited: nothing is wrong, the client just has to slow down. Retrying is safe because a
+      // refused request does not count against the limit.
+      if (error.rateLimited) {
+        const wait = error.retryAfterSeconds
+        return {
+          title: 'Slow down a moment',
+          message: wait
+            ? `Too many requests, please wait a moment (about ${wait} second${wait === 1 ? '' : 's'}) and try again.`
+            : 'Too many requests, please wait a moment and try again.',
+          retryable: true,
+        }
+      }
       // Image analysis has its own codes: the server's message is already user-facing
       // (e.g. "busy right now (rate limit), wait a minute").
       if (error.code === 'vision_unavailable') {
