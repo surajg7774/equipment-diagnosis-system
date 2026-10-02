@@ -47,6 +47,20 @@ class LLMResponseError(AppError):
     code = "llm_bad_response"
 
 
+class VisionUnavailableError(AppError):
+    """The image-analysis backend could not be reached, is rate limited, or is switched off."""
+
+    status_code = 503
+    code = "vision_unavailable"
+
+
+class VisionResponseError(AppError):
+    """The vision model answered, but not with a usable assessment."""
+
+    status_code = 502
+    code = "vision_bad_response"
+
+
 class InvalidImageError(AppError):
     status_code = 422
     code = "invalid_image"

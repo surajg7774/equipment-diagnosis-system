@@ -189,3 +189,8 @@ def test_warm_up_is_a_harmless_no_op_for_a_hosted_api():
     service = make_service(lambda r: called.append(r) or completion(VALID_OUTPUT))
     assert service.warm_up() is None
     assert called == []  # nothing is sent
+
+
+def test_confidence_survives_the_groq_adapter_end_to_end():
+    reply = completion({**VALID_OUTPUT, "confidence": 91})
+    assert make_service(lambda r: reply).generate_diagnosis("pump is loud", []).confidence == 91

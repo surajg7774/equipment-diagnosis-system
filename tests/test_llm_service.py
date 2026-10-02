@@ -19,6 +19,7 @@ from app.services.llm_service import (
     LLMDiagnosis,
     OllamaLLMService,
     build_messages,
+    normalize_confidence,
     parse_llm_output,
 )
 
@@ -298,3 +299,82 @@ def test_prompts_ask_the_llm_to_judge_whether_the_input_is_an_equipment_issue():
 def test_ollama_schema_requires_is_valid_issue_as_a_boolean():
     assert RESPONSE_SCHEMA["properties"]["is_valid_issue"] == {"type": "boolean"}
     assert "is_valid_issue" in RESPONSE_SCHEMA["required"]
+
+
+# --- self-reported confidence ----------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        (72, 72), (72.4, 72), (72.6, 73), ("72", 72), ("72%", 72), (" 85 % ", 85),  # valid, in various spellings
+        (0.85, 85), ("0.85", 85),  # a fraction is read as a percentage
+        (0, 0), (1, 1), (100, 100),  # the boundaries are valid (1 is 1%, not 100%)
+    ],
+)
+def test_normalize_confidence_accepts_usable_values(raw, expected):
+    assert normalize_confidence(raw) == (expected, None)
+
+
+@pytest.mark.parametrize(
+    "raw, reason",
+    [
+        (None, "missing"),
+        (150, "out of range"), (100.4, "out of range"), (-5, "out of range"), (1e9, "out of range"),
+        ("high", "not a number"), ("", "not a number"), ("n/a", "not a number"),
+        (True, "not a number"), ([72], "not a number"), ({"v": 1}, "not a number"),
+        (float("nan"), "not a number"), (float("inf"), "not a number"),
+    ],
+)
+def test_normalize_confidence_rejects_unusable_values_instead_of_repairing_them(raw, reason):
+    value, why = normalize_confidence(raw)
+    assert value is None and reason in why
+
+
+def test_parse_extracts_a_valid_confidence():
+    parsed = parse_llm_output(json.dumps({**VALID_OUTPUT, "confidence": 72}))
+    assert parsed.confidence == 72
+
+
+def test_parse_normalises_a_confidence_written_as_text():
+    assert parse_llm_output(json.dumps({**VALID_OUTPUT, "confidence": "64%"})).confidence == 64
+
+
+def test_parse_missing_confidence_is_none_and_warns_but_does_not_fail(caplog):
+    with caplog.at_level("WARNING", logger="app.services.llm_service"):
+        parsed = parse_llm_output(json.dumps(VALID_OUTPUT))  # VALID_OUTPUT has no confidence
+
+    assert parsed.confidence is None and parsed.severity is Severity.HIGH  # the diagnosis survives
+    record = next(r for r in caplog.records if r.getMessage() == "llm_confidence_unusable")
+    assert record.reason == "missing" and record.levelname == "WARNING"
+
+
+@pytest.mark.parametrize("bad", [150, -1, "very sure", True, None])
+def test_parse_out_of_range_or_garbled_confidence_is_none_and_warns(bad, caplog):
+    with caplog.at_level("WARNING", logger="app.services.llm_service"):
+        parsed = parse_llm_output(json.dumps({**VALID_OUTPUT, "confidence": bad}))
+
+    assert parsed.confidence is None
+    assert any(r.getMessage() == "llm_confidence_unusable" for r in caplog.records)
+
+
+def test_a_valid_confidence_does_not_warn(caplog):
+    with caplog.at_level("WARNING", logger="app.services.llm_service"):
+        parse_llm_output(json.dumps({**VALID_OUTPUT, "confidence": 72}))
+    assert not [r for r in caplog.records if r.getMessage() == "llm_confidence_unusable"]
+
+
+def test_prompts_ask_for_a_self_assessed_confidence_independent_of_retrieval():
+    for context in ([_case(1)], []):
+        user = build_messages("pump is loud", context)[1]["content"]
+        assert '"confidence"' in user and "0 to 100" in user
+        assert "Do NOT base it on whether similar past cases were provided" in user
+        assert "digits only" in user  # a real model once answered "thirty"
+
+
+def test_ollama_schema_requires_an_integer_confidence_between_0_and_100():
+    assert RESPONSE_SCHEMA["properties"]["confidence"] == {"type": "integer", "minimum": 0, "maximum": 100}
+    assert "confidence" in RESPONSE_SCHEMA["required"]
+
+
+def test_confidence_survives_the_ollama_adapter_end_to_end():
+    reply = chat_response({**VALID_OUTPUT, "confidence": 77})
+    assert make_service(lambda r: reply).generate_diagnosis("pump is loud", []).confidence == 77

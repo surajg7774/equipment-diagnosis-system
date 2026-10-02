@@ -51,14 +51,35 @@ class DiagnoseResponse(BaseModel):
         description="Likely root cause, written by the LLM for this specific report (not copied from a past case)."
     )
     recommended_action: str = Field(description="Next steps for the technician, written by the LLM.")
-    confidence_score: float = Field(
+    retrieval_confidence: float = Field(
         ge=0.0,
         le=1.0,
         description=(
-            "Cosine similarity (0-1) between the report and the best-matching past case, i.e. how "
-            "well the knowledge base covers this issue. It is NOT the LLM's certainty and not a "
-            "calibrated probability of being right."
+            "Retrieval similarity (0-1): cosine similarity between the report and the best-matching "
+            "past case, i.e. how well the knowledge base covers this issue. Says nothing about "
+            "whether the diagnosis is right."
         ),
+    )
+    llm_confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description=(
+            "The LLM's own self-reported certainty (0-1) that its diagnosis is correct, independent "
+            "of whether a similar past case was found. Self-reported, so only roughly calibrated. "
+            "0.5 if the model gave no usable value."
+        ),
+    )
+    llm_confidence_defaulted: bool = Field(
+        description=(
+            "True when the model returned no usable confidence and `llm_confidence` is the 0.5 "
+            "default rather than the model's own value. Clients should not present it as the AI's certainty."
+        )
+    )
+    confidence_score: float = Field(
+        ge=0.0,
+        le=1.0,
+        deprecated=True,
+        description="DEPRECATED alias of `retrieval_confidence`, kept for backward compatibility.",
     )
     similar_cases: list[SimilarCase] = Field(
         description="Top matching past cases retrieved as context, best first (shown even when they are weak matches)."
@@ -82,6 +103,9 @@ class DiagnoseResponse(BaseModel):
                     "severity": "high",
                     "diagnosis": "The loud grinding together with an oil leak at the shaft points to worn pump bearings and a failed shaft seal, likely from lack of lubrication.",
                     "recommended_action": "Isolate and shut down the pump, replace the bearings and the mechanical seal, re-lubricate to spec and check shaft alignment before restart.",
+                    "retrieval_confidence": 0.74,
+                    "llm_confidence": 0.9,
+                    "llm_confidence_defaulted": False,
                     "confidence_score": 0.74,
                     "diagnosis_basis": "similar_cases",
                     "note": None,
@@ -103,29 +127,43 @@ class DiagnoseResponse(BaseModel):
 
 
 class ImageDiagnoseResponse(BaseModel):
-    """Result of an image diagnosis (currently produced by a placeholder model)."""
+    """Result of an AI visual assessment of an equipment photo."""
 
-    ticket_id: int
-    severity: Severity
-    diagnosis: str
-    recommended_action: str
-    confidence_score: float = Field(ge=0.0, le=1.0)
-    model_name: str = Field(description="Which vision model produced this result.")
-    is_placeholder: bool = Field(
-        description="True while a stand-in model is used. Results are NOT real predictions."
+    is_equipment_photo: bool = Field(
+        description=(
+            "False when the photo does not show equipment (a person, animal, scenery...). Such "
+            "photos are answered but NOT stored: ticket_id and severity are null."
+        )
     )
+    ticket_id: int | None = Field(description="Id of the stored ticket; null if is_equipment_photo is false.")
+    damage_detected: bool = Field(description="Whether the model sees damage, wear, leaks, corrosion or other abnormal conditions.")
+    severity: Severity | None = Field(description="The model's urgency rating (low when normal); null if not an equipment photo.")
+    description: str = Field(description="What the model sees: the findings, in its own words.")
+    recommended_action: str = Field(description="Suggested next step for the technician.")
+    confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="The model's self-reported certainty (0-1); null if it gave no usable number.",
+    )
+    model_name: str = Field(description="The vision model that produced this assessment.")
+    provider: str = Field(description="Who runs the model (e.g. 'groq').")
+    note: str | None = Field(default=None, description="Set when the photo was not stored.")
 
     model_config = ConfigDict(
         json_schema_extra={
             "examples": [
                 {
+                    "is_equipment_photo": True,
                     "ticket_id": 43,
-                    "severity": "medium",
-                    "diagnosis": "[PLACEHOLDER] Visual pattern resembling: corrosion",
-                    "recommended_action": "Clean the affected area, apply a corrosion inhibitor and schedule a detailed inspection.",
-                    "confidence_score": 0.5,
-                    "model_name": "placeholder-vision-v0",
-                    "is_placeholder": True,
+                    "damage_detected": True,
+                    "severity": "high",
+                    "description": "A stack of steel pipes with heavy orange-brown surface rust and corroded threads on the pipe ends.",
+                    "recommended_action": "Do not use these pipes for pressure service; inspect wall thickness and replace corroded sections.",
+                    "confidence": 0.85,
+                    "model_name": "qwen/qwen3.8-27b",
+                    "provider": "groq",
+                    "note": None,
                 }
             ]
         }

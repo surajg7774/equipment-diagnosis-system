@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, UploadFile
 from app.api.deps import DiagnosisServiceDep, SettingsDep, TicketServiceDep, VisionServiceDep
 from app.schemas.common import ErrorResponse
 from app.schemas.diagnosis import DiagnoseRequest, DiagnoseResponse, ImageDiagnoseResponse
-from app.services.vision_service import validate_image_bytes
+from app.services.vision_service import MEDIA_TYPES, validate_image_bytes
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Diagnosis"])
@@ -24,7 +24,8 @@ router = APIRouter(tags=["Diagnosis"])
         "those cases are given to a local LLM (Ollama) as *reference examples*; if not, the LLM "
         "diagnoses from general knowledge and `note` says so. (3) The LLM writes a new, tailored "
         "`diagnosis` and `recommended_action`. `similar_cases` shows what was retrieved and "
-        "`confidence_score` is the retrieval similarity. The call is stored as a ticket "
+        "`retrieval_confidence` is the retrieval similarity and `llm_confidence` is the model's own "
+        "certainty in its diagnosis. The call is stored as a ticket "
         "(see `/history`), unless the LLM judges that the input is not an equipment issue "
         "(`is_valid_issue: false`), in which case nothing is stored. Expect a few seconds "
         "per call (up to a couple of minutes if the model has to be loaded first)."
@@ -58,7 +59,7 @@ def diagnose(
             severity=result.severity,
             diagnosis=result.diagnosis,
             recommended_action=result.recommended_action,
-            confidence_score=result.confidence_score,
+            confidence_score=result.retrieval_confidence,  # stored value: retrieval similarity
             similar_cases=result.similar_cases,
         ).id
     return DiagnoseResponse(
@@ -67,7 +68,10 @@ def diagnose(
         severity=result.severity,
         diagnosis=result.diagnosis,
         recommended_action=result.recommended_action,
-        confidence_score=result.confidence_score,
+        retrieval_confidence=result.retrieval_confidence,
+        llm_confidence=result.llm_confidence,
+        llm_confidence_defaulted=result.llm_confidence_defaulted,
+        confidence_score=result.retrieval_confidence,  # deprecated alias
         similar_cases=result.similar_cases,
         diagnosis_basis=result.diagnosis_basis,
         note=result.note,
@@ -77,22 +81,25 @@ def diagnose(
 @router.post(
     "/diagnose-image",
     response_model=ImageDiagnoseResponse,
-    summary="Diagnose an equipment issue from a photo (PLACEHOLDER model)",
+    summary="AI visual assessment of an equipment photo",
     description=(
-        "**Placeholder endpoint.** Accepts a JPEG/PNG/WebP photo and returns a result from a "
-        "stand-in model that does *not* analyse the image (`is_placeholder` is `true`). "
-        "The endpoint is wired to the `VisionService` interface, so a real CNN can replace "
-        "the placeholder without changing this API."
+        "Sends a JPEG/PNG/WebP photo to a vision-language model, which describes any visible "
+        "damage, wear, leaks, corrosion or abnormal conditions and rates the severity. The result "
+        "is stored as a ticket, unless the photo does not show equipment (`is_equipment_photo: "
+        "false`). **AI-generated visual assessment: a general-purpose model, not a substitute for "
+        "professional inspection.** The free Groq tier allows only about 3 images per minute."
     ),
     responses={
         413: {"model": ErrorResponse, "description": "Image too large."},
         415: {"model": ErrorResponse, "description": "Not a JPEG/PNG/WebP image."},
-        422: {"model": ErrorResponse, "description": "Missing or empty file."},
+        422: {"model": ErrorResponse, "description": "Missing, empty or unreadable image."},
+        502: {"model": ErrorResponse, "description": "The vision model returned an unusable result."},
+        503: {"model": ErrorResponse, "description": "Image analysis unavailable, disabled or rate limited."},
         500: {"model": ErrorResponse, "description": "Unexpected server error."},
     },
 )
 def diagnose_image(
-    file: Annotated[UploadFile, File(description="Photo of the faulty equipment (JPEG, PNG or WebP).")],
+    file: Annotated[UploadFile, File(description="Photo of the equipment (JPEG, PNG or WebP).")],
     settings: SettingsDep,
     vision_service: VisionServiceDep,
     tickets: TicketServiceDep,
@@ -101,34 +108,33 @@ def diagnose_image(
     data = file.file.read(settings.max_image_size_bytes + 1)
     image_format = validate_image_bytes(data, settings.max_image_size_bytes)
 
-    prediction = vision_service.analyze(data)
-    logger.info(
-        "image_diagnosis_completed",
-        extra={
-            "image_format": image_format,
-            "image_bytes": len(data),
-            "label": prediction.label,
-            "confidence": prediction.confidence,
-            "model": prediction.model_name,
-        },
-    )
+    analysis = vision_service.analyze(data, MEDIA_TYPES[image_format])
 
-    prefix = "[PLACEHOLDER] " if prediction.is_placeholder else ""
-    diagnosis = f"{prefix}Visual pattern resembling: {prediction.label}"
-    ticket = tickets.create_ticket(
-        source="image",
-        description=f"[image upload] {file.filename or 'unnamed'}",
-        severity=prediction.severity,
-        diagnosis=diagnosis,
-        recommended_action=prediction.recommended_action,
-        confidence_score=prediction.confidence,
-    )
+    ticket_id = None
+    note = None
+    if analysis.is_equipment_photo:
+        ticket_id = tickets.create_ticket(
+            source="image",
+            # The filename is client-controlled: cap it before it is stored.
+            description=f"[image upload] {(file.filename or 'unnamed')[:120]}",
+            severity=analysis.severity,
+            diagnosis=analysis.description,
+            recommended_action=analysis.recommended_action,
+            # Tickets need a number; when the model gave none use the neutral 0.5 (as for text).
+            confidence_score=0.5 if analysis.confidence is None else analysis.confidence,
+        ).id
+    else:
+        note = "This photo does not appear to show equipment, so it was not saved to ticket history."
+
     return ImageDiagnoseResponse(
-        ticket_id=ticket.id,
-        severity=prediction.severity,
-        diagnosis=diagnosis,
-        recommended_action=prediction.recommended_action,
-        confidence_score=prediction.confidence,
-        model_name=prediction.model_name,
-        is_placeholder=prediction.is_placeholder,
+        is_equipment_photo=analysis.is_equipment_photo,
+        ticket_id=ticket_id,
+        damage_detected=analysis.damage_detected,
+        severity=analysis.severity if analysis.is_equipment_photo else None,
+        description=analysis.description,
+        recommended_action=analysis.recommended_action,
+        confidence=analysis.confidence,
+        model_name=analysis.model_name,
+        provider=analysis.provider,
+        note=note,
     )

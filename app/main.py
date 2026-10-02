@@ -28,7 +28,7 @@ from app.schemas.common import ErrorBody, ErrorResponse, FieldError
 from app.services.diagnosis_service import DiagnosisService
 from app.services.embedding_service import create_embedder
 from app.services.llm_service import create_llm_service
-from app.services.vision_service import PlaceholderVisionService
+from app.services.vision_service import create_vision_service
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,11 @@ async def lifespan(app: FastAPI):
     llm_service = create_llm_service(settings)
     logger.info(
         "llm_configured",
-        extra={"provider": settings.llm_provider, "embedding_backend": settings.embedding_backend},
+        extra={
+            "provider": settings.llm_provider,
+            "embedding_backend": settings.embedding_backend,
+            "vision_provider": settings.vision_provider,
+        },
     )
     # Ollama: loading the model into memory can take minutes on a cold start. Do it in a
     # background thread so the server starts accepting requests immediately and the first
@@ -86,12 +90,14 @@ async def lifespan(app: FastAPI):
         top_k=settings.top_k,
         low_confidence_threshold=settings.low_confidence_threshold,
     )
-    # >>> To use a real CNN, construct your VisionService implementation here. <<<
-    app.state.vision_service = PlaceholderVisionService()
+    # Image analysis: a vision-language model chosen by VISION_PROVIDER (see vision_service.py).
+    vision_service = create_vision_service(settings)
+    app.state.vision_service = vision_service
 
     logger.info("app_started", extra={"environment": settings.environment})
     yield
     llm_service.close()
+    vision_service.close()
     engine.dispose()
     logger.info("app_stopped")
 

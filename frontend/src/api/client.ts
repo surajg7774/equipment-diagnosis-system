@@ -153,7 +153,7 @@ export function diagnose(description: string, signal?: AbortSignal): Promise<Dia
   })
 }
 
-/** Experimental: the backend currently answers from a placeholder model. */
+/** AI visual assessment of a photo (a vision-language model on the backend). */
 export function diagnoseImage(file: File, signal?: AbortSignal): Promise<ImageDiagnoseResponse> {
   const form = new FormData()
   form.append('file', file)

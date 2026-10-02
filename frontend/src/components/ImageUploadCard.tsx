@@ -5,10 +5,12 @@ import type { ImageDiagnoseResponse } from '../types/api'
 import { ConfidenceBar } from './ConfidenceBar'
 import { ErrorBanner } from './ErrorBanner'
 import { SeverityBadge } from './SeverityBadge'
-import { AlertIcon, ImageIcon, SpinnerIcon } from './icons'
+import { AlertIcon, CheckCircleIcon, ImageIcon, InfoIcon, SpinnerIcon } from './icons'
 
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 const MAX_BYTES = 5 * 1024 * 1024 // matches the backend default; the backend still enforces its own limit
+
+const CAVEAT = 'AI-generated visual assessment — not a substitute for professional inspection.'
 
 type Status =
   | { phase: 'idle' }
@@ -16,9 +18,105 @@ type Status =
   | { phase: 'success'; data: ImageDiagnoseResponse }
   | { phase: 'error'; error: unknown }
 
+function Finding({ title, children, testId }: { title: string; children: string; testId: string }) {
+  return (
+    <div>
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</h4>
+      <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-slate-800" data-testid={testId}>
+        {children}
+      </p>
+    </div>
+  )
+}
+
+/** The model's assessment of one photo. Not-equipment photos get a neutral card (nothing is stored). */
+function ImageResult({ data }: { data: ImageDiagnoseResponse }) {
+  if (!data.is_equipment_photo) {
+    return (
+      <div className="space-y-3 rounded-lg border border-slate-300 bg-slate-50 p-4" data-testid="image-result" data-kind="not-equipment">
+        <div className="flex items-start gap-2.5">
+          <InfoIcon className="mt-0.5 h-5 w-5 shrink-0 text-slate-500" />
+          <div>
+            <p className="font-semibold text-slate-800">This doesn&apos;t look like equipment</p>
+            <p className="text-sm text-slate-600">The AI couldn&apos;t treat this photo as something to inspect.</p>
+          </div>
+        </div>
+        <Finding title="What the AI sees" testId="image-description">
+          {data.description}
+        </Finding>
+        <Finding title="Suggested next step" testId="image-action">
+          {data.recommended_action}
+        </Finding>
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700" data-testid="image-no-ticket">
+          <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-slate-700">
+            No ticket created
+          </span>
+          <span>{data.note ?? 'This photo was not saved to ticket history.'}</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4" data-testid="image-result" data-kind="equipment">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {data.damage_detected ? (
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-900 ring-1 ring-inset ring-amber-400/60"
+            data-testid="image-damage-chip"
+            data-damage="true"
+          >
+            <AlertIcon className="h-3.5 w-3.5" />
+            Possible damage detected
+          </span>
+        ) : (
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300"
+            data-testid="image-damage-chip"
+            data-damage="false"
+          >
+            <CheckCircleIcon className="h-3.5 w-3.5" />
+            No visible damage
+          </span>
+        )}
+        <div className="flex items-center gap-2">
+          {data.ticket_id !== null && (
+            <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-600" data-testid="image-ticket-id">
+              Ticket #{data.ticket_id}
+            </span>
+          )}
+          {data.severity !== null && <SeverityBadge severity={data.severity} />}
+        </div>
+      </div>
+
+      <Finding title="What the AI sees" testId="image-description">
+        {data.description}
+      </Finding>
+      <div className="border-l-4 border-accent-500 pl-3">
+        <Finding title="Recommended action" testId="image-action">
+          {data.recommended_action}
+        </Finding>
+      </div>
+
+      {data.confidence !== null && (
+        <ConfidenceBar
+          score={data.confidence}
+          label="AI confidence"
+          caption="The model's own certainty in this assessment. A rough guide only: a photo cannot show internal faults."
+        />
+      )}
+
+      <p className="border-t border-slate-100 pt-3 text-xs text-slate-500" data-testid="image-model">
+        Assessed by {data.model_name} ({data.provider}). {CAVEAT}
+      </p>
+    </div>
+  )
+}
+
 /**
- * Optional photo diagnosis. The backend currently answers from a PLACEHOLDER model that
- * does not analyse the image, so this card is labelled experimental everywhere it appears.
+ * Photo diagnosis: a vision-language model describes visible damage, wear, leaks and corrosion.
+ * It is a general-purpose model, so every view of the card carries the "not a substitute for
+ * professional inspection" caveat.
  */
 export function ImageUploadCard() {
   const [file, setFile] = useState<File | null>(null)
@@ -86,22 +184,21 @@ export function ImageUploadCard() {
   const loading = status.phase === 'loading'
 
   return (
-    <section
-      className="rounded-xl border-2 border-dashed border-slate-300 bg-white/60 p-5"
-      aria-labelledby="image-heading"
-      data-testid="image-card"
-    >
+    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="image-heading" data-testid="image-card">
       <div className="flex flex-wrap items-center gap-2">
         <h2 id="image-heading" className="text-base font-semibold text-navy-900">
           Diagnose from a photo
         </h2>
-        <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider text-amber-900 ring-1 ring-inset ring-amber-500/40">
-          Experimental
+        <span className="rounded bg-sky-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider text-sky-900 ring-1 ring-inset ring-accent-500/40">
+          AI vision
         </span>
       </div>
       <p className="mt-1 text-sm text-slate-600">
-        Placeholder feature: the backend currently uses a stand-in model that <strong>does not actually analyze</strong>{' '}
-        the image, so results are not real predictions.
+        An AI vision model looks at your photo and describes any visible damage, wear, leaks or corrosion.
+      </p>
+      <p className="mt-2 flex items-start gap-1.5 rounded-md bg-slate-50 px-2.5 py-2 text-xs text-slate-600 ring-1 ring-inset ring-slate-200" data-testid="image-caveat">
+        <InfoIcon className="mt-px h-3.5 w-3.5 shrink-0 text-slate-400" />
+        {CAVEAT}
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -145,37 +242,14 @@ export function ImageUploadCard() {
           className="mt-3 inline-flex items-center gap-2 rounded-md bg-navy-800 px-4 py-2 text-sm font-semibold text-white hover:bg-navy-700 disabled:cursor-not-allowed disabled:opacity-70"
         >
           {loading && <SpinnerIcon className="h-4 w-4" />}
-          {loading ? 'Analyzing photo…' : 'Analyze photo (experimental)'}
+          {loading ? 'Analyzing photo…' : 'Analyze photo'}
         </button>
       )}
 
       {status.phase === 'error' && <ErrorBanner className="mt-4" error={status.error} onRetry={() => void analyze()} />}
-
       {status.phase === 'success' && (
-        <div className="mt-4 space-y-3 rounded-lg border border-slate-200 bg-white p-4" data-testid="image-result">
-          {status.data.is_placeholder && (
-            <div className="flex gap-2 rounded-md border-2 border-dashed border-amber-400 bg-amber-50 p-2.5 text-sm text-amber-950">
-              <AlertIcon className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-              <span>
-                <strong>Placeholder result.</strong> Produced by &ldquo;{status.data.model_name}&rdquo;, which does not
-                look at the image. Do not rely on it.
-              </span>
-            </div>
-          )}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="font-medium text-slate-800">{status.data.diagnosis}</p>
-            <div className="flex items-center gap-2">
-              <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-600">
-                Ticket #{status.data.ticket_id}
-              </span>
-              <SeverityBadge severity={status.data.severity} />
-            </div>
-          </div>
-          <p className="text-sm text-slate-700">{status.data.recommended_action}</p>
-          <ConfidenceBar
-            score={status.data.confidence_score}
-            label={status.data.is_placeholder ? 'Confidence (fixed placeholder value)' : 'Confidence'}
-          />
+        <div className="mt-4" aria-live="polite">
+          <ImageResult data={status.data} />
         </div>
       )}
     </section>

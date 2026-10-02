@@ -24,6 +24,7 @@ What this module contains
 
 import json
 import logging
+import math
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -47,6 +48,49 @@ _BAD_RESPONSE_MESSAGE = "The language model returned an unusable response. Pleas
 # ---------------------------------------------------------------------------
 # 1. The structured answer we require
 # ---------------------------------------------------------------------------
+# Used by the diagnosis service when the model gives no usable confidence number.
+DEFAULT_LLM_CONFIDENCE = 50
+
+
+def normalize_confidence(value: object) -> tuple[int | None, str | None]:
+    """Turn whatever the model wrote for "confidence" into an int 0-100.
+
+    Returns ``(percent, None)`` if usable, else ``(None, reason)``.  Models are asked for an
+    integer 0-100 but in practice also write ``"72%"``, ``72.4`` or the fraction ``0.85``:
+
+    * numbers and numeric strings (optionally ending in ``%``) are accepted and rounded;
+    * a bare decimal strictly between 0 and 1 is read as a fraction (0.85 -> 85). The values
+      0 and 1 stay as they are (0% / 1%);
+    * anything outside 0-100, non-numeric text, booleans, NaN/inf or a missing value is
+      *unusable*. We never "repair" nonsense into a number the model did not mean.
+    """
+    if value is None:
+        return None, "missing"
+    if isinstance(value, bool):  # bool is an int subclass; True must not become 1
+        return None, "not a number"
+
+    is_percent_text = False
+    if isinstance(value, str):
+        text = value.strip()
+        is_percent_text = text.endswith("%")
+        try:
+            number = float(text.rstrip("%").strip())
+        except ValueError:
+            return None, "not a number"
+    elif isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        return None, "not a number"
+
+    if math.isnan(number) or math.isinf(number):
+        return None, "not a number"
+    if 0 < number < 1 and not is_percent_text:
+        number *= 100  # the model answered as a fraction
+    if not 0 <= number <= 100:
+        return None, "out of range (expected 0-100)"
+    return round(number), None
+
+
 class LLMDiagnosis(BaseModel):
     """What every LLM implementation must return."""
 
@@ -59,6 +103,15 @@ class LLMDiagnosis(BaseModel):
     # France"). Defaults to True so that an omitted field never causes a real report
     # to be thrown away; the schema below still makes Ollama always provide it.
     is_valid_issue: bool = True
+    # The model's OWN certainty that its diagnosis is right (0-100), independent of whether a
+    # similar past case was found. None = it gave nothing usable; the diagnosis service then
+    # falls back to DEFAULT_LLM_CONFIDENCE and flags it.
+    confidence: int | None = None
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _normalise_confidence(cls, value: object) -> int | None:
+        return normalize_confidence(value)[0]
 
     @field_validator("severity", mode="before")
     @classmethod
@@ -111,7 +164,8 @@ Respond with a JSON object with exactly these fields:
 - "root_cause": the most likely root cause of THIS issue, tailored to the equipment and symptoms described (1-3 sentences).
 - "recommended_fix": concrete next steps for the technician, in order, including any safety precaution (1-4 sentences).
 - "severity": "high" if there is a safety risk or serious damage/outage is likely, "medium" if the equipment is degraded or failing and needs prompt repair, otherwise "low".
-- "is_valid_issue": true if the report describes a problem with equipment or machinery; false if it is unrelated to equipment (a general question, chit-chat, nonsense). If false: use "root_cause" to say briefly why it is not an equipment issue, use "recommended_fix" to ask the technician to describe the equipment problem, and set "severity" to "low"."""
+- "is_valid_issue": true if the report describes a problem with equipment or machinery; false if it is unrelated to equipment (a general question, chit-chat, nonsense). If false: use "root_cause" to say briefly why it is not an equipment issue, use "recommended_fix" to ask the technician to describe the equipment problem, and set "severity" to "low".
+- "confidence": an integer from 0 to 100 (digits only, for example 70, never words): how certain you are that your root_cause and recommended_fix are correct, given only the information in the report. Judge your own certainty. Do NOT base it on whether similar past cases were provided. A clear, specific report of a well-known fault deserves a high value; a vague, ambiguous or unusual report deserves a lower one. Avoid defaulting to the same number every time."""
 
 
 def _format_case(index: int, case: SimilarCase) -> str:
@@ -181,10 +235,24 @@ def parse_llm_output(raw: str) -> LLMDiagnosis:
 
     try:
         data = json.loads(raw[start : end + 1])
-        return LLMDiagnosis.model_validate(data)
+        diagnosis = LLMDiagnosis.model_validate(data)
     except (json.JSONDecodeError, ValidationError) as exc:
         logger.error("llm_output_invalid", extra={"output_chars": len(raw), "error": str(exc)[:300]})
         raise LLMResponseError(_BAD_RESPONSE_MESSAGE) from exc
+
+    # A missing/garbled confidence must never fail the request (the diagnosis itself is fine);
+    # it is left as None and replaced by a default later, but we make noise about it here.
+    if diagnosis.confidence is None:
+        received = data.get("confidence") if isinstance(data, dict) else None
+        logger.warning(
+            "llm_confidence_unusable",
+            extra={
+                "reason": normalize_confidence(received)[1],
+                "received": repr(received)[:40],
+                "hint": f"Using the default of {DEFAULT_LLM_CONFIDENCE}.",
+            },
+        )
+    return diagnosis
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +269,9 @@ RESPONSE_SCHEMA = {
         "recommended_fix": {"type": "string"},
         "severity": {"type": "string", "enum": [s.value for s in Severity]},
         "is_valid_issue": {"type": "boolean"},
+        "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
     },
-    "required": ["root_cause", "recommended_fix", "severity", "is_valid_issue"],
+    "required": ["root_cause", "recommended_fix", "severity", "is_valid_issue", "confidence"],
 }
 
 

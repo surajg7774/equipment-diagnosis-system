@@ -30,7 +30,7 @@ from app.main import create_app
 from app.schemas.enums import Severity
 from app.services.diagnosis_service import DiagnosisService
 from app.services.llm_service import LLMDiagnosis, LLMService
-from app.services.vision_service import PlaceholderVisionService
+from app.services.vision_service import VisionAnalysis, VisionService
 
 KNOWLEDGE_BASE_PATH = Path(__file__).resolve().parent.parent / "data" / "knowledge_base.json"
 # Wide enough that unrelated words almost never share a hash bucket, so a query of
@@ -39,6 +39,9 @@ _DIMS = 4096
 
 FAKE_ROOT_CAUSE = "LLM-generated root cause"
 FAKE_FIX = "LLM-generated fix"
+FAKE_VISION_DESCRIPTION = "Heavy orange rust and flaking paint on the pump casing."
+FAKE_VISION_ACTION = "Clean the casing, treat the corrosion and inspect the seals."
+FAKE_LLM_CONFIDENCE = 72  # percent; distinct from any retrieval similarity so tests can tell them apart
 
 
 class FakeEmbedder:
@@ -70,7 +73,10 @@ class FakeLLMService(LLMService):
 
     def __init__(self, result: LLMDiagnosis | None = None, error: Exception | None = None, ready: bool = True):
         self.result = result or LLMDiagnosis(
-            root_cause=FAKE_ROOT_CAUSE, recommended_fix=FAKE_FIX, severity=Severity.MEDIUM
+            root_cause=FAKE_ROOT_CAUSE,
+            recommended_fix=FAKE_FIX,
+            severity=Severity.MEDIUM,
+            confidence=FAKE_LLM_CONFIDENCE,
         )
         self.error = error
         self.ready = ready
@@ -86,6 +92,30 @@ class FakeLLMService(LLMService):
         return self.ready
 
 
+class FakeVisionService(VisionService):
+    """Stands in for the vision model: no network, canned assessment, records every call."""
+
+    def __init__(self, result: VisionAnalysis | None = None, error: Exception | None = None):
+        self.result = result or VisionAnalysis(
+            is_equipment_photo=True,
+            damage_detected=True,
+            description=FAKE_VISION_DESCRIPTION,
+            severity=Severity.MEDIUM,
+            recommended_action=FAKE_VISION_ACTION,
+            confidence=0.8,
+            model_name="fake-vision-model",
+            provider="fake",
+        )
+        self.error = error
+        self.calls: list[tuple[bytes, str]] = []  # (image_bytes, media_type) per call
+
+    def analyze(self, image_bytes, media_type):
+        self.calls.append((image_bytes, media_type))
+        if self.error:
+            raise self.error
+        return self.result
+
+
 @pytest.fixture
 def fake_embedder() -> FakeEmbedder:
     return FakeEmbedder()
@@ -94,6 +124,11 @@ def fake_embedder() -> FakeEmbedder:
 @pytest.fixture
 def fake_llm() -> FakeLLMService:
     return FakeLLMService()
+
+
+@pytest.fixture
+def fake_vision() -> FakeVisionService:
+    return FakeVisionService()
 
 
 @pytest.fixture
@@ -119,7 +154,7 @@ def db_session_factory():
 
 
 @pytest.fixture
-def app(db_session_factory, seeded_collection, fake_embedder, fake_llm):
+def app(db_session_factory, seeded_collection, fake_embedder, fake_llm, fake_vision):
     application = create_app(Settings(environment="testing", log_level="WARNING"))
     # Threshold 0.2 (not the production 0.5): the fake embedder's scores are on a
     # different scale from the real model's. Related text scores well above 0.2,
@@ -141,7 +176,7 @@ def app(db_session_factory, seeded_collection, fake_embedder, fake_llm):
 
     application.dependency_overrides[get_db] = override_get_db
     application.dependency_overrides[get_diagnosis_service] = lambda: service
-    application.dependency_overrides[get_vision_service] = lambda: PlaceholderVisionService()
+    application.dependency_overrides[get_vision_service] = lambda: fake_vision
     return application
 
 

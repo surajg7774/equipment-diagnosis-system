@@ -103,10 +103,19 @@ def test_threshold_separates_known_issues_from_unknown_ones(retrieval_only):
 
 
 # --- real LLM ------------------------------------------------------------------------------
+def assert_llm_reported_a_sensible_confidence(result):
+    """The model must have supplied the number itself (not the silent fallback), in a plausible range."""
+    assert result.llm_confidence_defaulted is False, "the LLM gave no usable confidence"
+    assert 0.05 <= result.llm_confidence <= 1.0, result.llm_confidence
+
+
+
 def test_real_llm_diagnoses_a_known_issue_using_retrieved_cases(full_pipeline):
     result = full_pipeline.diagnose("pump making loud grinding noise and leaking oil")
 
     assert result.diagnosis_basis is DiagnosisBasis.SIMILAR_CASES and result.note is None
+    assert_llm_reported_a_sensible_confidence(result)  # similar_cases path
+    assert result.retrieval_confidence >= settings.low_confidence_threshold  # strong match
     assert result.diagnosis.strip() and result.recommended_action.strip()
     assert isinstance(result.severity, Severity)
     assert result.severity is Severity.HIGH  # the keyword heuristic is a floor
@@ -122,7 +131,8 @@ def test_real_llm_handles_an_issue_with_no_close_match(full_pipeline):
 
     assert result.diagnosis_basis is DiagnosisBasis.GENERAL_REASONING
     assert result.note == NO_MATCH_NOTE
-    assert result.confidence_score < settings.low_confidence_threshold
+    assert result.retrieval_confidence < settings.low_confidence_threshold
+    assert_llm_reported_a_sensible_confidence(result)  # general_reasoning path
     assert result.diagnosis.strip() and result.recommended_action.strip()
     assert isinstance(result.severity, Severity)
 
@@ -156,3 +166,13 @@ def test_onnx_batching_does_not_change_the_vectors():
 
     cosine = (in_small_batches * in_one_batch).sum(axis=1)  # vectors are unit length
     assert cosine.min() > 0.9999
+
+
+def test_real_llm_confidence_is_independent_of_how_well_the_knowledge_base_matched(full_pipeline):
+    """A laptop is not in the knowledge base (weak retrieval), yet the model can be sure of a battery fault."""
+    result = full_pipeline.diagnose("laptop battery drains within an hour and the laptop shuts down at 30 percent")
+
+    assert result.diagnosis_basis is DiagnosisBasis.GENERAL_REASONING
+    assert result.retrieval_confidence < settings.low_confidence_threshold  # weak match...
+    assert_llm_reported_a_sensible_confidence(result)  # ...but the model still reports its own certainty
+    assert result.llm_confidence > result.retrieval_confidence  # the two scores genuinely differ

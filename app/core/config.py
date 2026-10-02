@@ -73,6 +73,23 @@ class Settings(BaseSettings):
     # Leave EMPTY for non-reasoning models (they reject the parameter).
     groq_reasoning_effort: str = "low"
 
+    # --- Image analysis (vision-language model) -------------------------------
+    # "groq": a vision-capable model on Groq (reuses GROQ_API_KEY / GROQ_BASE_URL).
+    # "none": image analysis switched off (POST /diagnose-image answers 503).
+    # With "groq" but no key, the server still starts and only the image endpoint is unavailable.
+    vision_provider: Literal["groq", "none"] = "groq"
+    # The only model on the checked account whose `input_modalities` include "image"
+    # (GET https://api.groq.com/openai/v1/models). Free tier: ~7,000 input tokens/minute and an
+    # image costs ~2,000, so only about 3 analyses per minute.
+    groq_vision_model: str = "qwen/qwen3.8-27b"
+    # Empty = do not send the parameter (the model does not "think" by default).
+    groq_vision_reasoning_effort: str = ""
+    # 0 = as repeatable as the model allows: an inspection should not change its verdict on the
+    # same photo between runs (at 0.2 the same photo flipped between medium and high severity).
+    vision_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    vision_max_tokens: int = Field(default=1024, gt=0)
+    vision_timeout_seconds: float = Field(default=60.0, gt=0)
+
     # --- LLM: Ollama (local server; see README for install + `ollama pull`) --
     # 127.0.0.1, not "localhost": on Windows "localhost" tries IPv6 first and each new
     # connection pays a ~2 s delay before falling back to IPv4.

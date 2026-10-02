@@ -11,7 +11,10 @@
         |  3. GENERATE   LLM writes a NEW diagnosis + fix + severity for THIS issue
         v
     diagnosis, recommended_action  (from the LLM)
-    confidence_score               (similarity of the best retrieved case)
+    retrieval_confidence           (similarity of the best retrieved case: how well the
+                                    knowledge base covers this issue)
+    llm_confidence                 (the LLM's own certainty in its diagnosis: independent of
+                                    whether a past case matched)
     similar_cases                  (what retrieval found, for transparency)
     severity                       (more severe of keyword heuristic and LLM)
 
@@ -32,7 +35,7 @@ from app.core.exceptions import KnowledgeBaseEmptyError
 from app.schemas.enums import DiagnosisBasis, Severity
 from app.schemas.knowledge_base import SimilarCase
 from app.services.embedding_service import Embedder
-from app.services.llm_service import LLMService
+from app.services.llm_service import DEFAULT_LLM_CONFIDENCE, LLMService
 from app.services.severity import classify_severity, combine_severity
 
 logger = logging.getLogger(__name__)
@@ -51,7 +54,9 @@ class DiagnosisResult:
     severity: Severity | None  # None when the input is not a valid issue
     diagnosis: str
     recommended_action: str
-    confidence_score: float
+    retrieval_confidence: float  # 0-1: similarity of the best retrieved case
+    llm_confidence: float  # 0-1: the LLM's self-reported certainty (0.5 if it gave none)
+    llm_confidence_defaulted: bool  # True if the LLM gave no usable number and we used the default
     similar_cases: list[SimilarCase]
     diagnosis_basis: DiagnosisBasis
     note: str | None
@@ -145,7 +150,7 @@ class DiagnosisService:
                 "The knowledge base is empty. Run `python -m app.db.seed` to load it."
             )
         retrieval_done = time.perf_counter()
-        confidence = cases[0].similarity_score
+        retrieval_confidence = cases[0].similarity_score
 
         # 2. DECIDE: only hand the cases to the LLM if they are actually close.
         grounded = has_close_match(cases, self._low_confidence_threshold)
@@ -155,6 +160,12 @@ class DiagnosisService:
         # on purpose: we never fall back to presenting a raw lookup as a diagnosis.
         llm_result = self._llm.generate_diagnosis(description, cases if grounded else [])
         llm_done = time.perf_counter()
+
+        # The LLM reports 0-100; the API uses 0-1 for both confidences. A missing/garbled value
+        # (already warned about in parse_llm_output) must not fail the request: use the default.
+        llm_confidence_defaulted = llm_result.confidence is None
+        reported = DEFAULT_LLM_CONFIDENCE if llm_confidence_defaulted else llm_result.confidence
+        llm_confidence = round(reported / 100, 2)
 
         heuristic = classify_severity(description)
         # Trust the LLM's "not an equipment issue" verdict only if the keyword heuristic
@@ -175,7 +186,9 @@ class DiagnosisService:
                 "heuristic_severity": heuristic.level.value,
                 "llm_severity": llm_result.severity.value,
                 "severity_terms": list(heuristic.matched_terms),
-                "confidence": confidence,
+                "retrieval_confidence": retrieval_confidence,
+                "llm_confidence": llm_confidence,
+                "llm_confidence_defaulted": llm_confidence_defaulted,
                 "top_match_id": cases[0].id,
                 "diagnosis_basis": basis.value,
                 "retrieval_ms": round((retrieval_done - started) * 1000, 1),
@@ -193,7 +206,9 @@ class DiagnosisService:
             severity=severity,
             diagnosis=llm_result.root_cause,
             recommended_action=llm_result.recommended_fix,
-            confidence_score=confidence,  # retrieval similarity, NOT the LLM's certainty
+            retrieval_confidence=retrieval_confidence,
+            llm_confidence=llm_confidence,
+            llm_confidence_defaulted=llm_confidence_defaulted,
             similar_cases=cases if is_valid else [],  # irrelevant noise for a non-issue
             diagnosis_basis=basis,
             note=note,

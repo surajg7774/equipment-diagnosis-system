@@ -37,6 +37,10 @@ services:
         value: low
       - key: LLM_MAX_TOKENS
         value: "1024"
+      - key: VISION_PROVIDER    # photo analysis via Groq (same GROQ_API_KEY); "none" disables it
+        value: groq
+      - key: GROQ_VISION_MODEL  # must accept image input; free tier allows only ~3 images/minute
+        value: qwen/qwen3.8-27b
       - key: EMBEDDING_BACKEND  # "onnx" = no PyTorch, fits in 512 MB
         value: onnx
       - key: AUTO_SEED_ON_STARTUP   # refill the knowledge base on boot (the free disk is wiped on restart)

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import type { DiagnoseResponse } from '../types/api'
 import { BasisBanner } from './BasisBanner'
-import { ConfidenceBar } from './ConfidenceBar'
+import { ConfidenceMeters } from './ConfidenceMeters'
 import { FeedbackButtons } from './FeedbackButtons'
 import { SeverityBadge } from './SeverityBadge'
 import { SimilarCaseCard } from './SimilarCaseCard'
@@ -42,13 +42,12 @@ export function ResultCard({ data }: { data: DiagnoseResponse }) {
           {data.recommended_action}
         </Block>
 
-        <ConfidenceBar
-          score={data.confidence_score}
-          caption={
-            grounded
-              ? "How closely your report matches known past cases. This is the match quality, not the AI's own certainty."
-              : "Low because no close past case exists, so this diagnosis is not backed by one. (Match quality, not the AI's own certainty.)"
-          }
+        {/* `??` / typeof guards: tolerate a backend that predates the two new fields (deploy skew). */}
+        <ConfidenceMeters
+          retrieval={data.retrieval_confidence ?? data.confidence_score}
+          ai={typeof data.llm_confidence === 'number' ? data.llm_confidence : null}
+          aiDefaulted={data.llm_confidence_defaulted === true}
+          grounded={grounded}
         />
 
         {data.ticket_id !== null && (

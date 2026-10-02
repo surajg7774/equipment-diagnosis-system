@@ -1,10 +1,19 @@
 """API tests using FastAPI's TestClient (in-memory SQLite + in-memory Chroma)."""
 
+import pytest
+
 from app.api.deps import get_diagnosis_service
-from app.core.exceptions import LLMResponseError, LLMUnavailableError
+from app.core.exceptions import (
+    InvalidImageError,
+    LLMResponseError,
+    LLMUnavailableError,
+    VisionResponseError,
+    VisionUnavailableError,
+)
 from app.schemas.enums import Severity
 from app.services.llm_service import LLMDiagnosis
-from tests.conftest import FAKE_FIX, FAKE_ROOT_CAUSE
+from app.services.vision_service import VisionAnalysis
+from tests.conftest import FAKE_FIX, FAKE_LLM_CONFIDENCE, FAKE_ROOT_CAUSE, FAKE_VISION_ACTION, FAKE_VISION_DESCRIPTION
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 # Words that appear nowhere in the knowledge base => no close match.
@@ -216,33 +225,119 @@ def test_feedback_validates_body(client):
 
 
 # --- /diagnose-image -------------------------------------------------------
-def test_diagnose_image_returns_flagged_placeholder_result(client):
-    response = client.post("/api/v1/diagnose-image", files={"file": ("pump.png", PNG_BYTES, "image/png")})
+JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+
+
+def _post_image(client, data=PNG_BYTES, name="pump.png", mime="image/png"):
+    return client.post("/api/v1/diagnose-image", files={"file": (name, data, mime)})
+
+
+def test_diagnose_image_returns_the_models_assessment_with_no_placeholder_labelling(client):
+    response = _post_image(client)
 
     assert response.status_code == 200
     body = response.json()
-    assert body["is_placeholder"] is True
-    assert body["diagnosis"].startswith("[PLACEHOLDER]")
-    # Deterministic: same image => same answer.
-    again = client.post("/api/v1/diagnose-image", files={"file": ("pump.png", PNG_BYTES, "image/png")})
-    assert again.json()["diagnosis"] == body["diagnosis"]
-    # And it is recorded in history.
-    assert client.get("/api/v1/history").json()["items"][0]["source"] == "image"
+    assert body["is_equipment_photo"] is True and body["damage_detected"] is True
+    assert body["description"] == FAKE_VISION_DESCRIPTION
+    assert body["recommended_action"] == FAKE_VISION_ACTION
+    assert body["severity"] == "medium" and body["confidence"] == 0.8
+    assert (body["model_name"], body["provider"]) == ("fake-vision-model", "fake")
+    assert body["ticket_id"] is not None and body["note"] is None
+    assert "is_placeholder" not in body  # the placeholder is gone
 
 
-def test_diagnose_image_rejects_non_images(client):
-    response = client.post("/api/v1/diagnose-image", files={"file": ("notes.png", b"not an image", "image/png")})
+def test_diagnose_image_stores_a_ticket_with_the_findings(client):
+    ticket_id = _post_image(client).json()["ticket_id"]
+
+    stored = client.get("/api/v1/history").json()["items"][0]
+    assert stored["id"] == ticket_id and stored["source"] == "image"
+    assert stored["description"] == "[image upload] pump.png"
+    assert stored["diagnosis"] == FAKE_VISION_DESCRIPTION  # what the model saw
+    assert stored["recommended_action"] == FAKE_VISION_ACTION
+    assert stored["severity"] == "medium" and stored["confidence_score"] == 0.8
+
+
+def test_the_detected_image_type_is_passed_to_the_vision_service(client, fake_vision):
+    _post_image(client, PNG_BYTES, "a.png", "image/png")
+    _post_image(client, JPEG_BYTES, "b.jpg", "image/jpeg")
+
+    assert [(data, media) for data, media in fake_vision.calls] == [(PNG_BYTES, "image/png"), (JPEG_BYTES, "image/jpeg")]
+
+
+def test_the_real_file_type_is_detected_from_its_bytes_not_trusted_from_the_client(client, fake_vision):
+    _post_image(client, JPEG_BYTES, "pretending.png", "image/png")  # JPEG bytes labelled as PNG
+
+    assert fake_vision.calls[0][1] == "image/jpeg"
+
+
+def test_a_photo_with_no_damage_is_reported_as_such(client, fake_vision):
+    fake_vision.result = VisionAnalysis(True, False, "The unit looks new and clean.", Severity.LOW, "Routine monitoring.", 0.9, "m", "fake")
+
+    body = _post_image(client).json()
+
+    assert body["damage_detected"] is False and body["severity"] == "low"
+
+
+def test_missing_confidence_is_reported_as_null_not_invented(client, fake_vision):
+    fake_vision.result = VisionAnalysis(True, True, "Rust.", Severity.MEDIUM, "Treat it.", None, "m", "fake")
+
+    body = _post_image(client).json()
+
+    assert body["confidence"] is None
+    assert client.get("/api/v1/history").json()["items"][0]["confidence_score"] == 0.5  # neutral value for the DB
+
+
+def test_a_photo_that_is_not_equipment_is_answered_but_not_stored(client, fake_vision):
+    fake_vision.result = VisionAnalysis(False, False, "A bird on a branch.", Severity.LOW, "Send a photo of the equipment.", 0.99, "m", "fake")
+
+    body = _post_image(client, name="bird.png").json()
+
+    assert body["is_equipment_photo"] is False
+    assert body["ticket_id"] is None and body["severity"] is None
+    assert "not saved to ticket history" in body["note"]
+    assert body["description"] == "A bird on a branch."
+    assert client.get("/api/v1/history").json()["total"] == 0
+
+
+@pytest.mark.parametrize(
+    "error, status, code",
+    [
+        (VisionUnavailableError("down"), 503, "vision_unavailable"),
+        (VisionResponseError("garbage"), 502, "vision_bad_response"),
+        (InvalidImageError("corrupt"), 422, "invalid_image"),
+    ],
+)
+def test_vision_failures_become_clean_errors_and_store_nothing(client, fake_vision, error, status, code):
+    fake_vision.error = error
+
+    response = _post_image(client)
+
+    assert response.status_code == status
+    assert response.json()["error"]["code"] == code
+    assert "Traceback" not in response.text
+    assert client.get("/api/v1/history").json()["total"] == 0
+
+
+def test_an_over_long_filename_is_truncated_before_it_is_stored(client):
+    _post_image(client, name="x" * 500 + ".png")
+
+    stored = client.get("/api/v1/history").json()["items"][0]["description"]
+    assert len(stored) <= len("[image upload] ") + 120
+
+
+def test_diagnose_image_rejects_non_images_without_calling_the_model(client, fake_vision):
+    response = _post_image(client, b"not an image", "notes.png")
+
     assert response.status_code == 415
+    assert fake_vision.calls == []
 
 
-def test_diagnose_image_rejects_empty_and_oversized_files(app, client):
-    empty = client.post("/api/v1/diagnose-image", files={"file": ("a.png", b"", "image/png")})
-    assert empty.status_code == 422
+def test_diagnose_image_rejects_empty_and_oversized_files_without_calling_the_model(app, client, fake_vision):
+    assert _post_image(client, b"").status_code == 422
 
     limit = app.state.settings.max_image_size_bytes
-    huge = PNG_BYTES + b"\x00" * limit
-    too_big = client.post("/api/v1/diagnose-image", files={"file": ("a.png", huge, "image/png")})
-    assert too_big.status_code == 413
+    assert _post_image(client, PNG_BYTES + b"\x00" * limit).status_code == 413
+    assert fake_vision.calls == []  # nothing invalid ever reached the (billable) model
 
 
 def test_diagnose_image_requires_file(client):
@@ -305,3 +400,68 @@ def test_a_real_emergency_is_saved_even_if_the_llm_calls_it_invalid(client, fake
 
     assert body["is_valid_issue"] is True and body["severity"] == "high"
     assert client.get("/api/v1/history").json()["total"] == 1
+
+
+# --- two confidence scores ----------------------------------------------------------------------------------
+def test_response_has_both_confidences_and_the_deprecated_alias(client):
+    body = _diagnose(client).json()
+
+    assert 0 < body["retrieval_confidence"] <= 1
+    assert body["llm_confidence"] == FAKE_LLM_CONFIDENCE / 100
+    assert body["llm_confidence_defaulted"] is False  # the fake LLM supplied a real value
+    # backward compatibility: the old field still exists and still means retrieval similarity
+    assert body["confidence_score"] == body["retrieval_confidence"]
+    assert body["retrieval_confidence"] == body["similar_cases"][0]["similarity_score"]
+
+
+def test_weak_match_with_a_confident_llm_reports_low_retrieval_and_high_llm_confidence(client, fake_llm):
+    fake_llm.result = LLMDiagnosis(root_cause="a", recommended_fix="b", severity=Severity.LOW, confidence=85)
+
+    body = _diagnose(client, NO_MATCH_TEXT).json()
+
+    assert body["diagnosis_basis"] == "general_reasoning"
+    assert body["retrieval_confidence"] < 0.2  # nothing similar in the knowledge base...
+    assert body["llm_confidence"] == 0.85  # ...but the model is sure of its general diagnosis
+
+
+def test_strong_match_with_an_unsure_llm_reports_high_retrieval_and_low_llm_confidence(client, fake_llm):
+    fake_llm.result = LLMDiagnosis(root_cause="a", recommended_fix="b", severity=Severity.LOW, confidence=20)
+
+    body = _diagnose(client).json()
+
+    assert body["diagnosis_basis"] == "similar_cases"
+    assert body["llm_confidence"] == 0.2
+    assert body["retrieval_confidence"] > 0.2
+
+
+def test_missing_llm_confidence_defaults_to_half_and_the_request_still_succeeds(client, fake_llm):
+    fake_llm.result = LLMDiagnosis(root_cause="a", recommended_fix="b", severity=Severity.LOW)  # no confidence
+
+    response = _diagnose(client)
+
+    assert response.status_code == 200
+    assert response.json()["llm_confidence"] == 0.5
+    assert response.json()["llm_confidence_defaulted"] is True  # so clients can say it is not the AI's number
+    assert client.get("/api/v1/history").json()["total"] == 1  # still stored
+
+
+def test_history_keeps_the_retrieval_similarity_as_its_confidence(client):
+    body = _diagnose(client).json()
+    stored = client.get("/api/v1/history").json()["items"][0]
+    assert stored["confidence_score"] == body["retrieval_confidence"]
+
+
+def test_invalid_input_still_returns_the_new_fields_without_storing_a_ticket(client, fake_llm):
+    _llm_rejects(fake_llm)
+
+    body = _diagnose(client, "what is the capital of France").json()
+
+    assert body["is_valid_issue"] is False and body["ticket_id"] is None
+    assert "retrieval_confidence" in body and "llm_confidence" in body
+    assert client.get("/api/v1/history").json()["total"] == 0
+
+
+def test_openapi_documents_both_confidences_and_marks_the_old_one_deprecated(client):
+    schema = client.get("/openapi.json").json()["components"]["schemas"]["DiagnoseResponse"]["properties"]
+    assert "retrieval_confidence" in schema and "llm_confidence" in schema
+    assert schema["confidence_score"].get("deprecated") is True

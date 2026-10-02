@@ -10,8 +10,8 @@ for the LLM, not the answer. Because the LLM writes a new diagnosis for the actu
 system can also handle issues that match nothing in the knowledge base.
 
 Stack: Python, FastAPI, Pydantic v2, SQLAlchemy (SQLite), ChromaDB, `all-MiniLM-L6-v2` embeddings
-(ONNX runtime, no PyTorch), and an LLM behind a swappable interface: Ollama locally or Groq's free
-tier hosted. Local development needs no API key; deployment needs a free Groq key.
+(ONNX runtime, no PyTorch), an LLM behind a swappable interface (Ollama locally or Groq's free
+tier hosted), and a vision-language model for photo analysis (Groq, `qwen/qwen3.8-27b`). Local development needs no API key; deployment needs a free Groq key.
 See [Deployment](#deployment-render--vercel) for hosting on Render + Vercel.
 
 ## How a diagnosis works
@@ -31,7 +31,8 @@ See [Deployment](#deployment-render--vercel) for hosting on Render + Vercel.
         |
         v
  response:  diagnosis, recommended_action ......... written by the LLM
-            confidence_score ...................... similarity of the best retrieved case
+            retrieval_confidence .................. similarity of the best retrieved case (0-1)
+            llm_confidence ........................ the LLM's own certainty in its diagnosis (0-1)
             similar_cases ......................... what retrieval found (always shown)
             severity .............................. more severe of keyword heuristic and LLM
             diagnosis_basis / note ................ says whether it was grounded in a past case
@@ -92,6 +93,9 @@ Real response from a local run (action text shortened):
   "severity": "high",
   "diagnosis": "The loud grinding noise and oil leakage suggest that the pump bearings may be worn or contaminated, leading to excessive wear and oil degradation. This could also indicate a lack of proper lubrication or contamination from contaminants in the fluid.",
   "recommended_action": "First, safely isolate the pump by shutting off the power and closing the inlet and outlet valves. Then, visually inspect the bearings for any signs of wear or contamination. If bearings are found to be worn, replace them. ...",
+  "retrieval_confidence": 0.5921,
+  "llm_confidence": 0.85,
+  "llm_confidence_defaulted": false,
   "confidence_score": 0.5921,
   "diagnosis_basis": "similar_cases",
   "note": null,
@@ -103,14 +107,16 @@ Real response from a local run (action text shortened):
 }
 ```
 
-For `"forklift hydraulic lift is slow and the mast jerks"` (nothing similar in the knowledge base)
-the best similarity is 0.38, below the threshold. The LLM is called *without* examples and the
-response carries:
+For `"laptop battery drains within an hour and the laptop shuts down at 30 percent"` (nothing
+similar in the knowledge base) the best similarity is 0.27, below the threshold. The LLM is called
+*without* examples, yet it can still be fairly sure of a battery-wear diagnosis, and the response
+says both things:
 
 ```json
 { "diagnosis_basis": "general_reasoning",
   "note": "No closely matching past case found - diagnosis based on general reasoning.",
-  "confidence_score": 0.3809 }
+  "retrieval_confidence": 0.2688,
+  "llm_confidence": 0.78 }
 ```
 
 For input that is not an equipment problem (`"what is the capital of France"`) the LLM flags it,
@@ -121,12 +127,91 @@ the API still answers with HTTP 200, but **nothing is stored**, so history stays
   "note": "This does not appear to describe an equipment issue, so it was not saved to ticket history." }
 ```
 
+## Two confidence scores
+
+A diagnosis reports two different numbers (both 0-1, shown as percentages in the UI):
+
+| Field | What it measures | Where it comes from |
+|---|---|---|
+| `retrieval_confidence` | How well the knowledge base covers this issue: the cosine similarity of the best-matching past case | The vector search (as before) |
+| `llm_confidence` | How certain the model says it is that its diagnosis is correct, **independent of whether a past case matched** | The LLM, asked to rate itself 0-100 (converted to 0-1) |
+
+Why both matter: they answer different questions and can disagree in useful ways.
+
+* **Low retrieval, high LLM** (the laptop battery above): nothing similar is in the knowledge base,
+  but the fault is a well-known one. Reporting only retrieval similarity made such answers look
+  untrustworthy.
+* **High retrieval, low LLM** (`"it makes a noise when it runs"`: 0.62 retrieval, 0.30 LLM): the
+  words resemble a past case, but the report is too vague for the model to be sure.
+* Both high: a known issue, clearly described. Both low: treat the answer as a starting point.
+
+`confidence_score` is still returned as a **deprecated alias of `retrieval_confidence`**, so existing
+clients keep working. Tickets (and `/history`) still store the retrieval similarity only.
+
+**When the model gives no usable number** (missing, out of range, or not numeric, e.g. one real Groq
+reply said `"thirty"`), the request still succeeds: a warning `llm_confidence_unusable` is logged,
+`llm_confidence` is set to the neutral default `0.5`, and `llm_confidence_defaulted` is `true` so
+clients do not present the default as the model's opinion (the UI marks it "estimate unavailable").
+Accepted spellings are `72`, `"72"`, `"72%"` and the fraction `0.85`; anything else is treated as
+unusable rather than guessed at.
+
+## Image analysis
+
+`POST /api/v1/diagnose-image` sends an uploaded photo to a **vision-language model**, which describes
+any visible damage, wear, leaks, corrosion or abnormal conditions and rates the severity.
+
+* **Provider / model:** Groq, **`qwen/qwen3.8-27b`**. It is the only model on the checked account
+  whose `input_modalities` include `image` (`GET https://api.groq.com/openai/v1/models` reports this
+  per model). It reuses `GROQ_API_KEY`. Choose with `VISION_PROVIDER` (`groq` or `none`) and
+  `GROQ_VISION_MODEL`. Another provider (e.g. Gemini) is one more `VisionService` subclass in
+  `app/services/vision_service.py`.
+* **Request:** multipart upload, field `file`: JPEG, PNG or WebP, up to 5 MB (`MAX_IMAGE_SIZE_BYTES`).
+  The format is detected from the file's bytes, not its name or `Content-Type`; invalid uploads are
+  rejected (415 / 413 / 422) *before* any call to the model.
+* **Response:**
+
+  ```json
+  { "is_equipment_photo": true, "ticket_id": 4, "damage_detected": true, "severity": "high",
+    "description": "A large stack of steel pipes with severe, widespread orange-brown rust ...",
+    "recommended_action": "Inspect wall thickness; if pitted or thin, scrap the pipes ...",
+    "confidence": 0.95, "model_name": "qwen/qwen3.8-27b", "provider": "groq", "note": null }
+  ```
+
+  `confidence` is the model's self-reported certainty (0-1), or `null` if it gave no usable number.
+  A photo that is **not equipment** (a bird, a person...) is answered with `is_equipment_photo: false`
+  but **not stored**, exactly like non-equipment text.
+* **Errors:** `503` `vision_unavailable` (disabled, no key, outage, or rate limited, each with its own
+  log hint), `502` `vision_bad_response`, `422` if the provider cannot read the image. Without a
+  `GROQ_API_KEY` the server still starts; only this endpoint answers 503. Nothing is ever invented.
+* **Repeatability:** run at temperature 0 (`VISION_TEMPERATURE`). In testing the same photo gave the
+  same severity and confidence three times out of three, though the wording still varies slightly.
+  (At 0.2 the same photo flipped between *medium* and *high*.)
+
+**Verified on real photos** (CC0 test images in `tests/fixtures/images/`): a stack of rusted pipes
+-> *damage, severe corrosion, threaded ends rusted*; a new stop-arm product graphic -> *no damage*,
+and it read the text in the picture; a bird on a rusty pipe -> *not equipment*, not stored.
+
+**Known limitations: treat the result as an assistive first pass, not an inspection.**
+
+* It is a **general-purpose** vision model, **not fine-tuned on equipment-failure imagery**. It
+  describes what is visible; it cannot see inside a machine, measure wall thickness, or judge
+  load, and it can miss subtle faults (hairline cracks, early corrosion) or misjudge poor,
+  dark or distant photos. Severity is the model's opinion, not a standard.
+* It can misread context: in testing it called water discharging from a pipe's open end an
+  active "leak from a break".
+* **Rate limit:** the Groq free tier allows about 7,000 input tokens a minute and one image costs
+  about 2,000, so **about 3 analyses per minute** across all users; beyond that the endpoint
+  answers 503 "busy, wait a minute".
+* **Privacy:** the photo is sent to Groq (a third party) for analysis. Do not upload images you
+  are not allowed to share.
+* The UI labels it *AI-generated visual assessment, not a substitute for professional inspection*.
+
 ## Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/v1/diagnose` | RAG diagnosis from a text description (stored as a ticket) |
-| POST | `/api/v1/diagnose-image` | **Placeholder** image diagnosis behind a swappable `VisionService` interface |
+| POST | `/api/v1/diagnose-image` | AI visual assessment of an equipment photo by a vision-language model (see [Image analysis](#image-analysis)) |
 | GET | `/api/v1/history` | Paginated past tickets, newest first (`page`, `page_size`) |
 | POST | `/api/v1/feedback` | `{ticket_id, was_correct}`; resubmitting updates the earlier answer |
 | GET | `/health` | Database, vector store and LLM status (503 if any is down) |
@@ -153,6 +238,11 @@ All settings are environment variables (or `.env`); see [.env.example](.env.exam
 | `OLLAMA_KEEP_ALIVE` | `30m` | How long Ollama keeps the model in RAM |
 | `LLM_TIMEOUT_SECONDS` | `180` | Per-request limit (covers a cold Ollama model load) |
 | `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` | `0.2` / `1024` | Reasoning models count hidden thinking against the token limit |
+| `VISION_PROVIDER` | `groq` | `groq` or `none` (disables `/diagnose-image`). Needs `GROQ_API_KEY` |
+| `GROQ_VISION_MODEL` | `qwen/qwen3.8-27b` | Must accept image input (see Image analysis) |
+| `VISION_TEMPERATURE` | `0` | 0 = most repeatable |
+| `VISION_MAX_TOKENS` / `VISION_TIMEOUT_SECONDS` | `1024` / `60` | Output cap / request limit |
+| `GROQ_VISION_REASONING_EFFORT` | *(empty)* | Optional; not sent when empty |
 | `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated browser origins allowed by CORS. Production: the frontend URL |
 | `AUTO_SEED_ON_STARTUP` | `true` | Rebuild the knowledge base at boot if it is empty (ephemeral hosts) |
 | `EMBEDDING_BACKEND` | `onnx` | `onnx` (about 210 MB RAM) or `sentence-transformers` (PyTorch, about 750 MB; extra install) |
@@ -168,20 +258,26 @@ All settings are environment variables (or `.env`); see [.env.example](.env.exam
 pytest                     # offline: the LLM is faked, no model download, runs in seconds
 pytest -m integration      # opt-in: real embedding model + the configured LLM provider
                            # (Ollama or Groq; skipped if it is not ready; Groq uses a little quota)
+pytest -m integration -k vision   # real photos through the real vision model (~2 min: paced
+                                  # for the free-tier limit of ~3 images/minute)
 ```
 
 The default suite covers the severity heuristic, similarity parsing with a mocked ChromaDB
 response, prompt building and LLM-output parsing, the Ollama adapter against a faked HTTP layer
 (connection failure, timeout, model not pulled, malformed output), the Groq adapter (auth, rate-limit, truncated-output and
-key-redaction cases), settings and secrets handling, CORS (allowed, blocked, preflight, error
+key-redaction cases), the vision adapter against a faked HTTP layer (inline base64 image, output
+parsing, every failure mode, never logging the image), the photo endpoint with a fake vision model, settings and secrets handling, CORS (allowed, blocked, preflight, error
 responses), start-up auto-seeding on an empty disk, the RAG routing logic with a faked LLM, seeding
 idempotency, and the API through FastAPI's `TestClient`. The integration tests
 check real retrieval and that the similarity threshold still separates known from unknown issues.
 
 ## Design notes and limitations
 
-* **Confidence is retrieval similarity, not the LLM's certainty.** It tells you how well the
-  knowledge base covers the issue. It is not a calibrated probability of being right.
+* **Two confidences, deliberately separate** (see above). `retrieval_confidence` is how well the
+  knowledge base covers the issue; `llm_confidence` is the model's own certainty. Neither is a
+  calibrated probability of being right. The LLM's number is *self-reported*: it moves sensibly
+  (about 0.3 for vague reports, 0.9 for clear ones in testing) but models tend to cluster on a few
+  round values (often 0.85), so read it as a rough high/medium/low signal, not a precise percentage.
 * **The 0.50 threshold was measured, not guessed.** With `all-MiniLM-L6-v2` on this knowledge base,
   reworded known issues scored 0.56-0.91, off-topic text 0.04-0.14, and most unknown equipment
   issues 0.25-0.52. A few near-misses that share equipment words (e.g. "pump pressure gauge reads
@@ -211,8 +307,9 @@ check real retrieval and that the similarity threshold still separates known fro
 * **LLM** -> `app/services/llm_service.py` holds the `LLMService` interface and both adapters
   (`OllamaLLMService`, `GroqLLMService`), picked by `LLM_PROVIDER` in `create_llm_service`. To add a
   provider, write one more subclass and one more branch there; nothing else changes.
-* **Vision** -> `app/services/vision_service.py`; the current model is a placeholder that does not
-  analyse the image (responses are flagged `is_placeholder: true`).
+* **Vision** -> `app/services/vision_service.py` holds the `VisionService` interface, the Groq
+  adapter and `create_vision_service` (picked by `VISION_PROVIDER`). Add a provider with one more
+  subclass and one more branch.
 * **Database** -> change `DATABASE_URL`.
 
 ## Project structure
@@ -264,6 +361,7 @@ Environment variables:
 | `ALLOWED_ORIGINS` | `https://<your-app>.vercel.app` | The frontend URL, no path. Comma-separate several |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | Optional (default). `llama-3.1-70b-versatile` is retired |
 | `GROQ_REASONING_EFFORT` | `low` | Optional (default) |
+| `VISION_PROVIDER` / `GROQ_VISION_MODEL` | `groq` / `qwen/qwen3.8-27b` | Optional (defaults). Photo analysis reuses `GROQ_API_KEY` |
 | `EMBEDDING_BACKEND` | `onnx` | Optional (default); this is what makes it fit in 512 MB |
 | `AUTO_SEED_ON_STARTUP` | `true` | Optional (default) |
 | `DATABASE_URL` | `sqlite:///./servicediagnose.db` | Optional (default); ephemeral on the free tier |

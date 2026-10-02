@@ -8,6 +8,8 @@
 
 from unittest.mock import MagicMock
 
+import json
+
 import pytest
 
 from app.core.exceptions import KnowledgeBaseEmptyError, LLMResponseError, LLMUnavailableError
@@ -20,8 +22,8 @@ from app.services.diagnosis_service import (
     has_close_match,
     parse_chroma_results,
 )
-from app.services.llm_service import LLMDiagnosis, LLMService, parse_llm_output
-from tests.conftest import FAKE_FIX, FAKE_ROOT_CAUSE, FakeLLMService
+from app.services.llm_service import DEFAULT_LLM_CONFIDENCE, LLMDiagnosis, LLMService, parse_llm_output
+from tests.conftest import FAKE_FIX, FAKE_LLM_CONFIDENCE, FAKE_ROOT_CAUSE, FakeLLMService
 
 
 def _metadata(case_id: str, severity: str = "high", equipment_type: str = "pump") -> dict:
@@ -150,7 +152,7 @@ def test_close_match_result_is_grounded_and_keeps_retrieval_metadata(service):
 
     assert result.diagnosis_basis == DiagnosisBasis.SIMILAR_CASES
     assert result.note is None
-    assert result.confidence_score == 0.8  # retrieval similarity of the best case
+    assert result.retrieval_confidence == 0.8  # retrieval similarity of the best case
     assert [c.id for c in result.similar_cases] == ["KB-001", "KB-003", "KB-006"]
 
 
@@ -173,7 +175,7 @@ def test_no_close_match_adds_note_and_keeps_low_confidence_and_retrieved_cases(m
     assert result.diagnosis_basis == DiagnosisBasis.GENERAL_REASONING
     assert result.note == NO_MATCH_NOTE
     assert "no closely matching past case found" in result.note.lower()
-    assert result.confidence_score == pytest.approx(0.1)
+    assert result.retrieval_confidence == pytest.approx(0.1)
     assert len(result.similar_cases) == 3  # still reported for transparency
 
 
@@ -237,7 +239,7 @@ def test_service_returns_well_formed_result_when_llm_output_is_parsed(mock_colle
     assert result.diagnosis == "Worn bearings and a failed shaft seal."  # whitespace stripped
     assert result.recommended_action == "Replace both and re-lubricate."
     assert result.severity is Severity.HIGH  # "High" normalised to the enum
-    assert 0.0 <= result.confidence_score <= 1.0
+    assert 0.0 <= result.retrieval_confidence <= 1.0
     assert len(result.similar_cases) == 3
 
 
@@ -254,7 +256,7 @@ def test_diagnose_logs_confidence_phase_timings_and_basis(service, caplog):
         service.diagnose("pump making loud grinding noise")
 
     record = next(r for r in caplog.records if r.getMessage() == "diagnosis_completed")
-    assert record.confidence == 0.8
+    assert record.retrieval_confidence == 0.8
     assert record.latency_ms >= 0 and record.retrieval_ms >= 0 and record.llm_ms >= 0
     assert record.diagnosis_basis == "similar_cases"
     assert record.severity in {"low", "medium", "high"}
@@ -303,3 +305,75 @@ def test_llm_rejection_is_overruled_when_the_keyword_heuristic_sees_a_real_probl
 
 def test_ordinary_reports_are_valid(service):
     assert service.diagnose("pump making loud grinding noise").is_valid_issue is True
+
+
+# --- two different confidences ---------------------------------------------------------------------
+def test_llm_confidence_is_the_models_own_number_scaled_to_0_1(service):
+    result = service.diagnose("pump making loud grinding noise and leaking oil")
+
+    assert result.llm_confidence == FAKE_LLM_CONFIDENCE / 100  # 0.72
+    assert result.llm_confidence_defaulted is False
+
+
+def test_the_two_confidences_are_independent_a_weak_match_can_still_be_a_confident_diagnosis(
+    mock_collection, service, llm
+):
+    """The motivating case: no close KB match, yet the LLM is fairly sure of its general diagnosis."""
+    mock_collection.query.return_value = NO_MATCH_RESPONSE  # retrieval similarity 0.1
+    llm.result = LLMDiagnosis(root_cause="x", recommended_fix="y", severity=Severity.MEDIUM, confidence=80)
+
+    result = service.diagnose("laptop battery drains fast and the laptop shuts down at 30 percent")
+
+    assert result.retrieval_confidence == pytest.approx(0.1)  # low: nothing similar in the KB
+    assert result.llm_confidence == 0.8  # high: the model is sure anyway
+    assert result.diagnosis_basis == DiagnosisBasis.GENERAL_REASONING
+
+
+def test_a_close_match_does_not_inflate_the_llms_own_confidence(service, llm):
+    llm.result = LLMDiagnosis(root_cause="x", recommended_fix="y", severity=Severity.LOW, confidence=30)
+
+    result = service.diagnose("pump making loud grinding noise and leaking oil")
+
+    assert result.retrieval_confidence == 0.8  # strong match
+    assert result.llm_confidence == 0.3  # but the model says it is unsure
+
+
+def test_missing_llm_confidence_falls_back_to_the_default_and_the_request_still_succeeds(service, llm):
+    llm.result = LLMDiagnosis(root_cause="x", recommended_fix="y", severity=Severity.LOW)  # confidence=None
+
+    result = service.diagnose("pump making loud grinding noise")
+
+    assert result.llm_confidence == DEFAULT_LLM_CONFIDENCE / 100 == 0.5
+    assert result.llm_confidence_defaulted is True
+    assert result.diagnosis == "x"  # the rest of the answer is untouched
+
+
+@pytest.mark.parametrize("garbage", ["very sure", 150, -3, True, None])
+def test_unusable_confidence_in_raw_llm_output_defaults_and_warns_without_failing(mock_collection, caplog, garbage):
+    raw = json.dumps(
+        {"root_cause": "Worn bearings.", "recommended_fix": "Replace them.", "severity": "high", "confidence": garbage}
+    )
+    service = DiagnosisService(StubEmbedder(), mock_collection, RawTextLLM(raw), 3, THRESHOLD)
+
+    with caplog.at_level("WARNING", logger="app.services.llm_service"):
+        result = service.diagnose("pump making loud grinding noise")
+
+    assert result.llm_confidence == 0.5 and result.llm_confidence_defaulted is True
+    assert any(r.getMessage() == "llm_confidence_unusable" for r in caplog.records)
+
+
+def test_valid_confidence_in_raw_llm_output_is_used_as_is(mock_collection):
+    raw = '```json\n{"root_cause": "a", "recommended_fix": "b", "severity": "low", "confidence": "88%"}\n```'
+    service = DiagnosisService(StubEmbedder(), mock_collection, RawTextLLM(raw), 3, THRESHOLD)
+
+    result = service.diagnose("pump making loud grinding noise")
+
+    assert result.llm_confidence == 0.88 and result.llm_confidence_defaulted is False
+
+
+def test_log_line_reports_both_confidences_and_whether_the_llm_one_was_defaulted(service, caplog):
+    with caplog.at_level("INFO", logger="app.services.diagnosis_service"):
+        service.diagnose("pump making loud grinding noise")
+
+    record = next(r for r in caplog.records if r.getMessage() == "diagnosis_completed")
+    assert (record.retrieval_confidence, record.llm_confidence, record.llm_confidence_defaulted) == (0.8, 0.72, False)

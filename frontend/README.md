@@ -23,10 +23,13 @@ Other scripts: `npm run build` (type-check + production build), `npm run lint`.
 
 * **Diagnose** (`/`): describe a problem (min 10 characters, validated inline), optionally pick an
   equipment type (a UI hint only: it changes the placeholder; the backend's diagnose endpoint takes
-  just a description, and the text is sent exactly as typed), and optionally upload a photo (clearly labelled *experimental*: the backend uses a placeholder
-  model). The result card has two states:
-  * **Valid issue**: severity badge, ticket number, diagnosis, recommended action, confidence bar,
-    and a banner showing whether the answer is *based on similar past cases* or *general
+  just a description, and the text is sent exactly as typed), and optionally upload a photo for an **AI visual assessment** (a vision model describes visible
+  damage, wear, leaks or corrosion; the card shows the findings, severity, a damage chip and the
+  model's confidence, and always carries the caveat *"AI-generated visual assessment — not a
+  substitute for professional inspection"*). A photo that is not equipment gets a neutral card and
+  no ticket. The text-diagnosis result card has two states:
+  * **Valid issue**: severity badge, ticket number, diagnosis, recommended action, **two
+    confidence tiles** (see below), and a banner showing whether the answer is *based on similar past cases* or *general
     reasoning*; similar cases are listed below.
   * **Not an equipment issue** (`is_valid_issue: false`): a neutral message with the assistant's
     reply and a "No ticket created" notice. No severity, ticket id or confidence is rendered.
@@ -46,8 +49,12 @@ src/
 
 ## Notes
 
-* `confidence_score` is the *retrieval similarity* (how well past cases match), not the model's
-  certainty. The UI labels it "Match confidence" and says so.
+* Two different readings are shown, styled differently on purpose, each with a tooltip:
+  **Match confidence** (`retrieval_confidence`: how closely the report matches past cases) and
+  **AI confidence** (`llm_confidence`: the model's own certainty, independent of any match). When
+  the model gave no usable number the AI tile is dashed and says "estimate unavailable". A backend
+  that does not send the new fields yet (e.g. mid-redeploy) is tolerated: the Match tile falls back
+  to the deprecated `confidence_score` and the AI tile is simply omitted.
 * Errors: unreachable backend and timeouts show a clear message with **Try again**; a 422's
   `error.details[].message` is shown inline on the form field.
 * Vite binds to `localhost` (IPv6 `::1` on some Windows setups): open <http://localhost:5173>

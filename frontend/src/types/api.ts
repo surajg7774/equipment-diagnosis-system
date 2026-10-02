@@ -35,7 +35,13 @@ export interface DiagnoseResponse {
   severity: Severity | null
   diagnosis: string
   recommended_action: string
-  /** 0-1. Retrieval similarity of the best past case, NOT the LLM's certainty. */
+  /** 0-1. Retrieval similarity of the best past case: how well the knowledge base covers this issue. */
+  retrieval_confidence: number
+  /** 0-1. The LLM's own self-reported certainty in its diagnosis, independent of any retrieval match. */
+  llm_confidence: number
+  /** True when the model gave no usable number and `llm_confidence` is just the 0.5 default. */
+  llm_confidence_defaulted?: boolean
+  /** @deprecated Alias of `retrieval_confidence`, kept by the backend for compatibility. */
   confidence_score: number
   /** Can be empty (always empty when is_valid_issue is false). */
   similar_cases: SimilarCase[]
@@ -43,16 +49,24 @@ export interface DiagnoseResponse {
   note: string | null
 }
 
-// --- POST /api/v1/diagnose-image (placeholder model) ----------------------------
+// --- POST /api/v1/diagnose-image (AI visual assessment by a vision-language model) ---
 export interface ImageDiagnoseResponse {
-  ticket_id: number
-  severity: Severity
-  diagnosis: string
+  /** False when the photo does not show equipment; then nothing was stored. */
+  is_equipment_photo: boolean
+  /** null when is_equipment_photo is false. */
+  ticket_id: number | null
+  damage_detected: boolean
+  /** null when is_equipment_photo is false. */
+  severity: Severity | null
+  /** What the model sees: its findings. */
+  description: string
   recommended_action: string
-  confidence_score: number
+  /** 0-1, the model's self-reported certainty; null if it gave no usable number. */
+  confidence: number | null
   model_name: string
-  /** True while a stand-in model is used: the result is NOT a real prediction. */
-  is_placeholder: boolean
+  provider: string
+  /** Set when the photo was not stored. */
+  note: string | null
 }
 
 // --- GET /api/v1/history ------------------------------------------------------------

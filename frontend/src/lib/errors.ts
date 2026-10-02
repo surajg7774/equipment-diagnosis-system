@@ -34,10 +34,22 @@ export function describeError(error: unknown): ErrorView {
         retryable: false,
       }
     default:
+      // Image analysis has its own codes: the server's message is already user-facing
+      // (e.g. "busy right now (rate limit), wait a minute").
+      if (error.code === 'vision_unavailable') {
+        return { title: 'Image analysis is unavailable', message: error.message, retryable: true }
+      }
+      if (error.code === 'vision_bad_response') {
+        return {
+          title: "The AI couldn't assess this photo",
+          message: 'It returned an unusable answer. Try again, or use a different photo.',
+          retryable: true,
+        }
+      }
       if (error.status === 503) {
         return {
           title: 'The AI service is unavailable',
-          message: 'The diagnosis model is not available right now. Check that Ollama is running, then try again.',
+          message: 'The diagnosis model is not available right now. Please try again in a moment.',
           retryable: true,
         }
       }
