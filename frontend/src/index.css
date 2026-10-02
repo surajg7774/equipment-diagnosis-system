@@ -1,0 +1,29 @@
+@import 'tailwindcss';
+
+/* Palette: navy/slate for structure, one accent (electric blue). Severity colours
+   (green / yellow / red) are reserved for severity badges only. */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Consolas, monospace;
+
+  --color-navy-950: #08111f;
+  --color-navy-900: #0d1b33;
+  --color-navy-800: #14284a;
+  --color-navy-700: #1d3a66;
+
+  --color-accent-300: #7dd3fc;
+  --color-accent-400: #38bdf8;
+  --color-accent-500: #0ea5e9;
+  --color-accent-600: #0284c7;
+  --color-accent-700: #0369a1;
+}
+
+body {
+  @apply bg-slate-100 text-slate-800 antialiased;
+}
+
+/* Visible keyboard focus everywhere, in the accent colour. */
+:focus-visible {
+  outline: 2px solid var(--color-accent-500);
+  outline-offset: 2px;
+}

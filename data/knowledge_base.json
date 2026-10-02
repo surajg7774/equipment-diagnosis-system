@@ -1,0 +1,226 @@
+[
+  {
+    "id": "KB-001",
+    "equipment_type": "pump",
+    "issue_description": "Centrifugal pump makes a loud grinding noise and vibrates heavily during operation.",
+    "root_cause": "Worn or failed bearings, often caused by lack of lubrication or contamination.",
+    "recommended_fix": "Shut down the pump, replace the bearings, flush old grease and re-lubricate to manufacturer spec. Check shaft alignment before restart.",
+    "severity": "high"
+  },
+  {
+    "id": "KB-002",
+    "equipment_type": "pump",
+    "issue_description": "Pump is leaking oil around the shaft seal and there is an oil puddle under the housing.",
+    "root_cause": "Degraded mechanical shaft seal or an over-filled oil reservoir.",
+    "recommended_fix": "Isolate and drain the pump, replace the mechanical seal, verify the oil level is within the sight-glass marks, then check for leaks under load.",
+    "severity": "high"
+  },
+  {
+    "id": "KB-003",
+    "equipment_type": "pump",
+    "issue_description": "Pump runs but flow rate and discharge pressure are lower than normal.",
+    "root_cause": "Partially clogged suction strainer or impeller wear reducing hydraulic efficiency.",
+    "recommended_fix": "Clean the suction strainer, inspect the impeller for wear or debris, and replace it if clearance exceeds tolerance.",
+    "severity": "medium"
+  },
+  {
+    "id": "KB-004",
+    "equipment_type": "pump",
+    "issue_description": "Pump makes a crackling or gravel-like rattling sound and pressure fluctuates.",
+    "root_cause": "Cavitation caused by insufficient suction head, a blocked inlet line or an air leak on the suction side.",
+    "recommended_fix": "Check the inlet valve is fully open, clear suction blockages, tighten suction flanges, and confirm the fluid level meets the required NPSH.",
+    "severity": "medium"
+  },
+  {
+    "id": "KB-005",
+    "equipment_type": "pump",
+    "issue_description": "Pump casing is warm and there is a slow drip from the packing gland.",
+    "root_cause": "Packing gland is slightly loose or the packing has reached end of life.",
+    "recommended_fix": "Adjust gland follower nuts evenly to restore a slight drip, or repack the gland at the next planned maintenance window.",
+    "severity": "low"
+  },
+  {
+    "id": "KB-006",
+    "equipment_type": "motor",
+    "issue_description": "Electric motor is overheating and there is a burning smell near the windings.",
+    "root_cause": "Overloaded motor, blocked cooling airflow or insulation breakdown in the windings.",
+    "recommended_fix": "Stop the motor immediately, let it cool, clear the cooling fins and fan cover, measure winding insulation resistance, and rewind or replace if insulation is degraded.",
+    "severity": "high"
+  },
+  {
+    "id": "KB-007",
+    "equipment_type": "motor",
+    "issue_description": "Motor hums but will not start turning, and the breaker sometimes trips.",
+    "root_cause": "Failed start capacitor, single-phasing from a lost supply phase, or a seized rotor.",
+    "recommended_fix": "Isolate power, check all three phases at the terminals, test the start capacitor, and rotate the shaft by hand to rule out a mechanical seizure.",
+    "severity": "high"
+  },
+  {
+    "id": "KB-008",
+    "equipment_type": "motor",
+    "issue_description": "Motor has a high-pitched squealing noise that gets louder as it speeds up.",
+    "root_cause": "Dry or worn motor bearings, or a loose drive belt slipping on the pulley.",
+    "recommended_fix": "Lubricate or replace the bearings and inspect the drive belt tension and pulley alignment.",
+    "severity": "medium"
+  },
+  {
+    "id": "KB-009",
+    "equipment_type": "motor",
+    "issue_description": "Motor vibrates excessively and the mounting bolts keep loosening.",
+    "root_cause": "Shaft misalignment, unbalanced rotor or loose foundation.",
+    "recommended_fix": "Perform laser alignment on the coupling, balance the rotor if needed, and re-torque the baseplate and mounting bolts with thread locker.",
+    "severity": "medium"
+  },
+  {
+    "id": "KB-010",
+    "equipment_type": "motor",
+    "issue_description": "Motor runs slightly warmer than before but performance is normal.",
+    "root_cause": "Dust buildup on the motor casing reducing heat dissipation.",
+    "recommended_fix": "Clean the motor casing and cooling fins during the next scheduled maintenance and log temperature readings.",
+    "severity": "low"
+  },
+  {
+    "id": "KB-011",
+    "equipment_type": "printer",
+    "issue_description": "Printer has a paper jam and the paper is crumpled inside the feed path.",
+    "root_cause": "Worn pickup rollers or incorrect paper type and humidity-damaged paper.",
+    "recommended_fix": "Power off, remove all jammed paper gently, clean or replace the pickup rollers, and reload fresh paper of the correct weight.",
+    "severity": "low"
+  },
+  {
+    "id": "KB-012",
+    "equipment_type": "printer",
+    "issue_description": "Printed pages have black streaks and smudges down the page.",
+    "root_cause": "Dirty or damaged drum, or leaking toner cartridge.",
+    "recommended_fix": "Replace the toner cartridge, clean the drum and corona wire, and print a few test pages to clear residual toner.",
+    "severity": "low"
+  },
+  {
+    "id": "KB-013",
+    "equipment_type": "printer",
+    "issue_description": "Printer shows a fuser error code and pages come out with toner that smears off.",
+    "root_cause": "Failing fuser assembly that no longer reaches the correct temperature.",
+    "recommended_fix": "Power down and let the fuser cool, then replace the fuser unit. Do not keep printing, as unfused toner contaminates the machine.",
+    "severity": "medium"
+  },
+  {
+    "id": "KB-014",
+    "equipment_type": "printer",
+    "issue_description": "Printer is not detected by the network and shows as offline for all users.",
+    "root_cause": "IP address conflict, lost network configuration or a faulty network card.",
+    "recommended_fix": "Print a configuration page, assign a static IP, restart the print spooler on the server, and replace the network interface if it still fails.",
+    "severity": "low"
+  },
+  {
+    "id": "KB-015",
+    "equipment_type": "printer",
+    "issue_description": "Printer emits smoke and a strong burning smell from the rear panel.",
+    "root_cause": "Electrical fault in the power supply unit or overheated fuser components.",
+    "recommended_fix": "Unplug the printer immediately, do not power it on again, and arrange a qualified technician to inspect and replace the power supply.",
+    "severity": "high"
+  },
+  {
+    "id": "KB-016",
+    "equipment_type": "HVAC",
+    "issue_description": "Air conditioner is running but blowing warm air and not cooling the room.",
+    "root_cause": "Low refrigerant charge from a leak, or a failed compressor.",
+    "recommended_fix": "Check refrigerant pressures, locate and repair any leak, recharge to specification, and test compressor amp draw.",
+    "severity": "medium"
+  },
+  {
+    "id": "KB-017",
+    "equipment_type": "HVAC",
+    "issue_description": "HVAC unit makes a loud banging or rattling noise from the blower section.",
+    "root_cause": "Loose or unbalanced blower wheel, or a failing blower motor bearing.",
+    "recommended_fix": "Turn off the unit, inspect and tighten the blower wheel set screw, clean the wheel, and replace the blower motor if the bearing is worn.",
+    "severity": "medium"
+  },
+  {
+    "id": "KB-018",
+    "equipment_type": "HVAC",
+    "issue_description": "Water is dripping from the indoor air handler and pooling on the floor.",
+    "root_cause": "Clogged condensate drain line or a frozen evaporator coil that has melted.",
+    "recommended_fix": "Flush the condensate drain with a wet vacuum and cleaning solution, replace the air filter, and check for low airflow causing coil icing.",
+    "severity": "low"
+  },
+  {
+    "id": "KB-019",
+    "equipment_type": "HVAC",
+    "issue_description": "Outdoor condenser unit will not start and the fan is not spinning.",
+    "root_cause": "Failed run capacitor or contactor, or a tripped high-pressure switch.",
+    "recommended_fix": "Disconnect power, test and replace the capacitor or contactor, and verify the high-pressure switch has not locked out.",
+    "severity": "medium"
+  },
+  {
+    "id": "KB-020",
+    "equipment_type": "HVAC",
+    "issue_description": "Strong refrigerant or chemical smell and oily residue near the compressor of the cooling unit.",
+    "root_cause": "Refrigerant leak at a fitting or coil joint, creating a safety and environmental hazard.",
+    "recommended_fix": "Shut the unit down, ventilate the area, have a certified technician locate and repair the leak and recover and recharge refrigerant per regulation.",
+    "severity": "high"
+  },
+  {
+    "id": "KB-021",
+    "equipment_type": "conveyor belt",
+    "issue_description": "Conveyor belt is drifting to one side and rubbing against the frame.",
+    "root_cause": "Belt tracking misalignment from uneven tension or a misaligned roller.",
+    "recommended_fix": "Stop the conveyor, adjust the take-up tensioners evenly, realign the head and tail pulleys, and re-run the belt empty to confirm tracking.",
+    "severity": "medium"
+  },
+  {
+    "id": "KB-022",
+    "equipment_type": "conveyor belt",
+    "issue_description": "Conveyor belt is slipping and the drive pulley spins without moving the belt.",
+    "root_cause": "Insufficient belt tension or worn lagging on the drive pulley.",
+    "recommended_fix": "Increase belt tension via the take-up, inspect and replace worn pulley lagging, and clear any material buildup.",
+    "severity": "medium"
+  },
+  {
+    "id": "KB-023",
+    "equipment_type": "conveyor belt",
+    "issue_description": "Conveyor belt has a visible tear and frayed edge along its length.",
+    "root_cause": "Sharp material impact, snagging on the frame, or edge wear from misalignment.",
+    "recommended_fix": "Stop the conveyor and apply lockout. Repair with a vulcanized splice or mechanical fastener for small tears, or replace the belt section for large damage.",
+    "severity": "high"
+  },
+  {
+    "id": "KB-024",
+    "equipment_type": "conveyor belt",
+    "issue_description": "Conveyor idler rollers squeak and a few rollers no longer turn.",
+    "root_cause": "Seized idler bearings from dust ingress and lack of lubrication.",
+    "recommended_fix": "Replace the seized idlers, grease the remaining ones on schedule, and install dust shields where material spills.",
+    "severity": "low"
+  },
+  {
+    "id": "KB-025",
+    "equipment_type": "generator",
+    "issue_description": "Diesel generator fails to start and the engine only cranks slowly.",
+    "root_cause": "Weak or discharged starting battery, or corroded battery terminals.",
+    "recommended_fix": "Test and charge the battery, clean and tighten the terminals, and replace the battery if it fails a load test.",
+    "severity": "medium"
+  },
+  {
+    "id": "KB-026",
+    "equipment_type": "generator",
+    "issue_description": "Generator produces black smoke from the exhaust and loses power under load.",
+    "root_cause": "Clogged air filter, dirty fuel injectors, or the engine being overloaded.",
+    "recommended_fix": "Replace the air filter, service or clean the fuel injectors, and verify the connected load is within the rated capacity.",
+    "severity": "medium"
+  },
+  {
+    "id": "KB-027",
+    "equipment_type": "generator",
+    "issue_description": "Generator shut down automatically with a low oil pressure alarm and oil is leaking from the engine.",
+    "root_cause": "Oil leak from a gasket or filter seal leading to dangerously low oil level.",
+    "recommended_fix": "Do not restart. Locate and repair the leak, refill with the correct oil grade, replace the oil filter, and verify oil pressure at idle before returning to service.",
+    "severity": "high"
+  },
+  {
+    "id": "KB-028",
+    "equipment_type": "generator",
+    "issue_description": "Generator output voltage is unstable and the lights flicker when the generator is running.",
+    "root_cause": "Faulty automatic voltage regulator (AVR) or governor hunting due to dirty fuel.",
+    "recommended_fix": "Test and replace the AVR if its output is erratic, replace the fuel filter, and check governor linkage for smooth movement.",
+    "severity": "medium"
+  }
+]

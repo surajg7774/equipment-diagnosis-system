@@ -1,0 +1,24 @@
+# Web framework + server
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9      # required by FastAPI for file uploads (/diagnose-image)
+
+# Validation / settings
+pydantic>=2.7
+pydantic-settings>=2.3
+
+# Relational storage (SQLite in dev, PostgreSQL later via DATABASE_URL)
+sqlalchemy>=2.0
+
+# Vector search + local embeddings (no API key needed).
+# ChromaDB bundles onnxruntime, which runs all-MiniLM-L6-v2 in ~210 MB of RAM. That is why
+# PyTorch / sentence-transformers is NOT required (it would need ~750 MB and a ~2 GB install).
+# Optional: `pip install sentence-transformers` + EMBEDDING_BACKEND=sentence-transformers.
+chromadb>=0.5
+
+# HTTP client: talks to the LLM provider (local Ollama or hosted Groq)
+httpx>=0.27
+
+# Testing
+pytest>=8.0
+httpx2>=2.0                  # used by FastAPI/Starlette's TestClient (falls back to httpx with a deprecation warning)

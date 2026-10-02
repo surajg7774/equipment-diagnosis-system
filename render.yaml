@@ -1,0 +1,57 @@
+# Render Blueprint for the BACKEND (the frontend goes on Vercel; see README "Deployment").
+# Render dashboard: New > Blueprint > pick this repo. Variables marked `sync: false` are
+# prompted for in the dashboard (secrets / values only you know) and are never stored in git.
+#
+# Why this fits a free instance (512 MB RAM, 0.1 CPU): the embedding model runs on the ONNX
+# runtime bundled with ChromaDB (~210 MB resident) instead of PyTorch (~750 MB). Measured peak
+# for the whole app is documented in the README.
+services:
+  - type: web
+    name: servicediagnose-api
+    runtime: python
+    plan: free                  # 512 MB / 0.1 CPU. Spins down after 15 min idle (~1 min cold start).
+    # If the repo root is not this folder, add:  rootDir: <path to the folder containing app/>
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Liveness only (no database / vector store / LLM checks): a Groq outage must not make Render
+    # restart a healthy server. Use /health yourself for full diagnostics.
+    healthCheckPath: /health/live
+    autoDeployTrigger: commit   # redeploy on every push (replaces the deprecated `autoDeploy: true`)
+    envVars:
+      # ---- required --------------------------------------------------------------------------
+      - key: PYTHON_VERSION     # a fully qualified version is required; this is what it was tested on
+        value: 3.13.5
+      - key: LLM_PROVIDER       # "groq" in production ("ollama" is for local development only)
+        value: groq
+      - key: GROQ_API_KEY       # SECRET. Paste in the dashboard: https://console.groq.com/keys
+        sync: false
+      - key: ALLOWED_ORIGINS    # your deployed frontend, e.g. https://my-app.vercel.app (no path)
+        sync: false             # comma-separate several; trailing slashes are ignored
+
+      # ---- recommended (these are also the defaults) ---------------------------------------
+      - key: ENVIRONMENT
+        value: production
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: GROQ_REASONING_EFFORT   # "low" keeps the reasoning model fast; empty for non-reasoning models
+        value: low
+      - key: LLM_MAX_TOKENS
+        value: "1024"
+      - key: EMBEDDING_BACKEND  # "onnx" = no PyTorch, fits in 512 MB
+        value: onnx
+      - key: AUTO_SEED_ON_STARTUP   # refill the knowledge base on boot (the free disk is wiped on restart)
+        value: "true"
+      # Both live on the ephemeral disk: tickets/feedback and the vector store reset whenever the
+      # service restarts, redeploys or spins down. Fine for a demo; see README for durable options.
+      - key: DATABASE_URL
+        value: sqlite:///./servicediagnose.db
+      - key: CHROMA_PERSIST_DIR
+        value: ./chroma_db
+      - key: LOG_LEVEL
+        value: INFO
+
+      # ---- documented but UNUSED in production (only read when LLM_PROVIDER=ollama) -------------
+      - key: OLLAMA_BASE_URL
+        value: http://127.0.0.1:11434
+      - key: OLLAMA_MODEL
+        value: llama3.2:3b
