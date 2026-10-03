@@ -44,10 +44,14 @@ Other scripts: `npm run build` (type-check + production build), `npm run lint`.
   says so and the diagnosis is based on the description alone. "Try again" re-sends the same photo. The standalone
   **Diagnose from a photo** card below the form is unchanged, for people who only have a photo.
 * **Thumbs up / down** (Diagnose page, on the first diagnosis): *Was this diagnosis correct?* Each verdict
-  now teaches the knowledge base and the UI says how: a thumbs up records a **confirmed working fix**, a
-  thumbs down records **an approach that did not work**, so similar future problems avoid it. When a past
-  failure influenced an answer, an amber notice says so and lists what did not work. The History bar and
-  the Stats page count the working and failed fixes.
+  now teaches the knowledge base and the UI says how: a thumbs up saves a **provisional fix** (one end-user
+  click is one confirmation, so it counts as verified once a technician reviews it), a thumbs down records
+  **an approach that did not work**, so similar future problems avoid it. The same goes for "Yes, it's fixed"
+  in a session. Retrieved cases carry a **Verified fix** or **Provisional · confirmed once** chip. When a past
+  failure influenced an answer, an amber notice says so and lists what did not work. The History bar and the
+  Stats page count verified, provisional and failed fixes. On the History page a provisional ticket shows a
+  **Provisional** chip and a technician's **Verify** button (the same call as Confirm), which upgrades that same
+  record to verified.
 * **Iterative flow** (Diagnose page): every valid diagnosis opens a *session*. The card is labelled
   **Attempt 1 of 4** and asks **"Did this solve it?"**. *No, try something else* swaps a different solution
   into the same card (**Attempt 2 of 4**, then 3, 4) while the earlier ones collect in a collapsible

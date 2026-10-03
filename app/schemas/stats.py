@@ -53,7 +53,11 @@ class StatsResponse(BaseModel):
     technician_verified_count: int | None = Field(description="Records added from technician-reviewed tickets.")
     verified_fix_count: int | None = Field(
         default=None,
-        description="Knowledge-base records of fixes confirmed to WORK (thumbs up, technician confirm/correct, resolved session).",
+        description="Knowledge-base records of fixes VERIFIED to work (a technician's review, or enough confirmations).",
+    )
+    provisional_fix_count: int | None = Field(
+        default=None,
+        description="Records of fixes confirmed only once (an end user's click) and not verified yet: still retrieved, but labelled and ranked lower.",
     )
     failed_fix_count: int | None = Field(
         default=None,
@@ -75,6 +79,7 @@ class StatsResponse(BaseModel):
                     "original_seed_count": 28,
                     "technician_verified_count": 3,
                     "verified_fix_count": 3,
+                    "provisional_fix_count": 2,
                     "failed_fix_count": 1,
                     "review": {"pending": 8, "confirmed": 2, "corrected": 2},
                     "average_confidence": {"retrieval": 0.512, "llm": 0.81, "image": 0.9},

@@ -1,5 +1,5 @@
 import { toPercent } from '../lib/format'
-import { CheckCircleIcon } from './icons'
+import { CheckCircleIcon, InfoIcon } from './icons'
 import type { SimilarCase } from '../types/api'
 
 export function SimilarCaseCard({ item }: { item: SimilarCase }) {
@@ -13,14 +13,24 @@ export function SimilarCaseCard({ item }: { item: SimilarCase }) {
           <span className="font-semibold tabular-nums text-slate-800">{toPercent(item.similarity_score)}%</span> similar
         </span>
       </div>
-      {item.source === 'verified' && (
+      {item.source === 'verified' && item.outcome === 'provisional_fix' && (
+        <p
+          className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-900 ring-1 ring-inset ring-amber-400/60"
+          data-testid="provisional-chip"
+          title="Confirmed once by an end user, but not yet verified by a technician. It is still used, with less weight than a verified fix."
+        >
+          <InfoIcon className="h-3 w-3" />
+          Provisional · confirmed once
+        </p>
+      )}
+      {item.source === 'verified' && item.outcome !== 'provisional_fix' && (
         <p
           className="mt-2 inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-900 ring-1 ring-inset ring-accent-500/40"
           data-testid="verified-chip"
-          title="Added to the knowledge base from a diagnosis that was confirmed to work (thumbs up, or a technician's confirm or correction)"
+          title="Verified: a technician reviewed it, or it has enough confirmations"
         >
           <CheckCircleIcon className="h-3 w-3" />
-          Confirmed working fix
+          Verified fix
         </p>
       )}
       <p className="mt-2 text-sm text-slate-800">{item.issue_description}</p>

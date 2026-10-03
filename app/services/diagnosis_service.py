@@ -123,8 +123,28 @@ def parse_chroma_results(raw: Mapping[str, Any]) -> list[SimilarCase]:
 
 
 def has_close_match(cases: list[SimilarCase], threshold: float) -> bool:
-    """True if the best (first) case is at least ``threshold`` similar to the query."""
-    return bool(cases) and cases[0].similarity_score >= threshold
+    """True if the best case is at least ``threshold`` similar to the query (whatever order they are listed in)."""
+    return bool(cases) and max(c.similarity_score for c in cases) >= threshold
+
+
+# A provisional fix (confirmed only once) must not outrank a verified one that is nearly as similar.
+# Each provisional case is ranked as if it were this much LESS similar than it really is; the similarity
+# shown to users and used for confidence and the close-match test stays the real value.
+PROVISIONAL_RANK_PENALTY = 0.05
+
+
+def prefer_verified(cases: list[SimilarCase]) -> list[SimilarCase]:
+    """Order cases best first, with verified (and seed) fixes ahead of provisional ones that are only slightly closer.
+
+    Without any provisional case this returns the order it was given (a stable sort on the similarity that
+    Chroma already sorted by), so it changes nothing until a fix has been confirmed only once.
+    """
+
+    def rank(case: SimilarCase) -> float:
+        provisional = case.outcome == KnowledgeOutcome.PROVISIONAL_FIX
+        return case.similarity_score - (PROVISIONAL_RANK_PENALTY if provisional else 0.0)
+
+    return sorted(cases, key=rank, reverse=True)
 
 
 def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
@@ -178,7 +198,7 @@ class DiagnosisService:
 
     def find_similar_cases(self, description: str) -> list[SimilarCase]:
         """Return the ``top_k`` most similar past cases with WORKING fixes (seed + verified), best first."""
-        return self._search(self._embedder.embed([description])[0], WORKING_FIXES)
+        return prefer_verified(self._search(self._embedder.embed([description])[0], WORKING_FIXES))
 
     def _repeats_a_ruled_out_solution(self, result: LLMDiagnosis, ruled_out: Sequence[tuple[str, str]]) -> bool:
         """True if the new solution is (nearly) the same as a (root cause, fix) known not to work."""
@@ -204,7 +224,7 @@ class DiagnosisService:
 
         # 1. RETRIEVE (one embedding, two searches: fixes that worked, and fixes that did not)
         query_vector = self._embedder.embed([description])[0]
-        cases = self._search(query_vector, WORKING_FIXES)
+        cases = prefer_verified(self._search(query_vector, WORKING_FIXES))
         if not cases:
             raise KnowledgeBaseEmptyError(
                 "The knowledge base is empty. Run `python -m app.db.seed` to load it."
@@ -216,7 +236,8 @@ class DiagnosisService:
             c for c in self._search(query_vector, FAILED_FIXES) if c.similarity_score >= self._low_confidence_threshold
         ]
         retrieval_done = time.perf_counter()
-        retrieval_confidence = cases[0].similarity_score
+        # The best REAL similarity, not the first case's: ranking a provisional fix lower must not lower this.
+        retrieval_confidence = max(c.similarity_score for c in cases)
 
         # 2. DECIDE: only hand the cases to the LLM if they are actually close.
         grounded = has_close_match(cases, self._low_confidence_threshold)

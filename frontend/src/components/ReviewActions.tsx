@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { confirmTicket } from '../api/client'
 import { describeError } from '../lib/errors'
-import type { ReviewResponse, ReviewStatus } from '../types/api'
+import type { FixVerification, ReviewResponse, ReviewStatus } from '../types/api'
 import { CheckCircleIcon, PencilIcon, SpinnerIcon } from './icons'
 
 interface Props {
   ticketId: number
   status: ReviewStatus
+  /** Whether the ticket's fix in the knowledge base is verified or only provisional (confirmed once by a user). */
+  verification?: FixVerification | null
   onReviewed: (response: ReviewResponse) => void
   /** Open the correction form for this ticket. */
   onCorrect: () => void
@@ -15,8 +17,8 @@ interface Props {
 const base =
   'inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset transition-colors disabled:cursor-not-allowed disabled:opacity-60'
 
-/** Confirm / Correct buttons for one ticket. Which ones appear depends on its current status. */
-export function ReviewActions({ ticketId, status, onReviewed, onCorrect }: Props) {
+/** Confirm / Verify / Correct buttons for one ticket. Which ones appear depends on its current status. */
+export function ReviewActions({ ticketId, status, verification, onReviewed, onCorrect }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -45,6 +47,20 @@ export function ReviewActions({ ticketId, status, onReviewed, onCorrect }: Props
         >
           {busy ? <SpinnerIcon className="h-3.5 w-3.5" /> : <CheckCircleIcon className="h-3.5 w-3.5" />}
           Confirm
+        </button>
+      )}
+      {/* An end user already confirmed this fix (a thumbs up or "Yes"): it is provisional until a technician checks it. */}
+      {status === 'confirmed' && verification === 'provisional' && (
+        <button
+          type="button"
+          onClick={() => void confirm()}
+          disabled={busy}
+          title="A user confirmed this fix. As a technician, verify it so it counts as a verified fix in the knowledge base."
+          data-testid="verify-button"
+          className={`${base} bg-accent-600 text-white ring-accent-600 hover:bg-accent-700`}
+        >
+          {busy ? <SpinnerIcon className="h-3.5 w-3.5" /> : <CheckCircleIcon className="h-3.5 w-3.5" />}
+          Verify
         </button>
       )}
       <button

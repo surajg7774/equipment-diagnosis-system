@@ -132,6 +132,12 @@ class Settings(BaseSettings):
     # escalate to a human technician (each "No" costs one LLM call).
     max_solution_attempts: int = Field(default=4, ge=1, le=10)
 
+    # --- Knowledge-base safeguard: how many confirmations a fix needs before it counts as VERIFIED ----------
+    # A user's click is worth 1 and a technician's review 2 (see app/core/confirmation.py), so the default of 2
+    # leaves a click-only fix "provisional" and lets a technician verify it. 1 = the old behaviour (anything
+    # verifies at once): the kill switch if the safeguard ever gets in the way. 3 = needs a user AND a technician.
+    min_confirmations_to_verify: int = Field(default=2, ge=1, le=3)
+
     @property
     def cors_origins(self) -> list[str]:
         """ALLOWED_ORIGINS as a clean list ("*" allowed; trailing slashes removed)."""

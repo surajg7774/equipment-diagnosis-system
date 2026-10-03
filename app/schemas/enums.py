@@ -40,8 +40,23 @@ class KnowledgeOutcome(str, Enum):
     Seed records carry no outcome: they are curated resolved cases and count as working fixes.
     """
 
-    VERIFIED_FIX = "verified_fix"  # thumbs up / technician confirmed or corrected: this fix worked
+    VERIFIED_FIX = "verified_fix"  # confirmed to work by enough confirmations (a technician's review, or 2+)
+    PROVISIONAL_FIX = "provisional_fix"  # confirmed once (an end user's click) but not verified yet
     FAILED_FIX = "failed_fix"  # thumbs down: this diagnosis + fix was suggested and did NOT work
+
+
+class ConfirmationSource(str, Enum):
+    """Who confirmed a fix. The system has no user identity, so the two roles are what it can tell apart."""
+
+    USER = "user"  # an end user: thumbs up, or "Yes, it's fixed" in a diagnosis session
+    TECHNICIAN = "technician"  # a technician's review: Confirm or Correct on the History page
+
+
+class FixVerification(str, Enum):
+    """How far a confirmed fix has been checked."""
+
+    PROVISIONAL = "provisional"  # not enough confirmations yet: still retrieved, but labelled and ranked lower
+    VERIFIED = "verified"
 
 
 class DiagnosisBasis(str, Enum):

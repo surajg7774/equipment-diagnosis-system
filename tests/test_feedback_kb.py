@@ -114,15 +114,18 @@ def test_a_repeated_thumbs_down_updates_the_same_record_instead_of_adding_anothe
 # =============================================================================================================
 # 2. Thumbs UP creates / updates a verified_fix record
 # =============================================================================================================
-def test_thumbs_up_creates_a_verified_fix_record(client, seeded_collection):
+def test_thumbs_up_records_the_fix_but_only_as_provisional_one_click_does_not_verify_it(client, seeded_collection):
+    """Changed on purpose by the confirmation safeguard: an end user's click is ONE confirmation (see test_confirmations.py)."""
     first = diagnose(client)
 
     body = thumbs(client, first["ticket_id"], up=True).json()
 
-    assert (body["knowledge_base_outcome"], body["knowledge_base_updated"]) == ("verified_fix", True)
+    assert (body["knowledge_base_outcome"], body["knowledge_base_updated"]) == ("provisional_fix", True)
+    assert (body["verification"], body["confirmation_count"]) == ("provisional", 1)
     assert body["kb_record_id"].startswith(f"VC-{first['ticket_id']}-")
     stored = record(seeded_collection, body["kb_record_id"])
-    assert (stored["outcome"], stored["source"]) == ("verified_fix", "verified")
+    assert (stored["outcome"], stored["source"], stored["verification"]) == ("provisional_fix", "verified", "provisional")
+    assert (stored["confirmation_count"], stored["confirmed_by"]) == (1, "user")
     assert (stored["root_cause"], stored["recommended_fix"]) == (first["diagnosis"], first["recommended_action"])
     assert history_item(client, first["ticket_id"])["review_status"] == "confirmed"  # the same path as a technician's confirm
 
@@ -165,7 +168,7 @@ def test_changing_a_thumbs_down_to_up_retracts_that_tickets_own_failed_record(cl
 
     body = thumbs(client, first["ticket_id"], up=True).json()
 
-    assert body["knowledge_base_outcome"] == "verified_fix"
+    assert body["knowledge_base_outcome"] == "provisional_fix"  # a confirmed fix, but only one end-user click so far
     assert seeded_collection.get(ids=[failed_id])["ids"] == []  # the user changed their mind: no contradiction left
     assert client.get("/api/v1/knowledge-base/stats").json()["failed"] == 0
 
@@ -403,17 +406,19 @@ def test_a_model_that_keeps_repeating_is_retried_only_once_and_the_answer_is_fla
 # =============================================================================================================
 # 7. Stats
 # =============================================================================================================
-def test_stats_count_verified_fix_and_failed_fix_records(client):
-    a, b, c = (diagnose(client)["ticket_id"] for _ in range(3))
-    thumbs(client, a, up=True)
+def test_stats_count_verified_provisional_and_failed_fix_records(client):
+    a, b, c, d = (diagnose(client)["ticket_id"] for _ in range(4))
+    thumbs(client, a, up=True)  # an end user's click: provisional
+    client.post(f"/api/v1/tickets/{d}/confirm")  # a technician's review: verified
     thumbs(client, b, up=False)
     thumbs(client, c, up=False)
 
     stats = client.get("/api/v1/stats").json()
 
-    assert (stats["verified_fix_count"], stats["failed_fix_count"]) == (1, 2)
-    assert (stats["knowledge_base_size"], stats["original_seed_count"], stats["technician_verified_count"]) == (31, 28, 1)
-    assert client.get("/api/v1/knowledge-base/stats").json()["failed"] == 2
+    assert (stats["verified_fix_count"], stats["provisional_fix_count"], stats["failed_fix_count"]) == (1, 1, 2)
+    assert (stats["knowledge_base_size"], stats["original_seed_count"], stats["technician_verified_count"]) == (32, 28, 1)
+    kb = client.get("/api/v1/knowledge-base/stats").json()
+    assert (kb["verified"], kb["provisional"], kb["failed"]) == (1, 1, 2)
 
 
 def test_stats_on_a_fresh_system_have_no_feedback_records(client):

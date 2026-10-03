@@ -65,5 +65,6 @@ def session_feedback(
         max_attempts=sessions.max_attempts,
         message=outcome.message,
         added_to_knowledge_base=outcome.added_to_knowledge_base,
+        knowledge_base_verification=outcome.verification,
         next_attempt=next_attempt,
     )

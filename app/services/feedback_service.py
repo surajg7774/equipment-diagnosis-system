@@ -1,7 +1,9 @@
 """Thumbs up / thumbs down on a diagnosis, and what each one teaches the knowledge base.
 
-    thumbs up   -> the AI's diagnosis becomes a confirmed working fix (outcome "verified_fix"), through
-                   the same confirm logic a technician uses on the History page.
+    thumbs up   -> the AI's diagnosis is recorded as a confirmed fix, through the same confirm logic a
+                   technician uses on the History page. An end user's click is ONE confirmation, which is
+                   not enough to verify it: it is stored as "provisional_fix" (still retrieved, but labelled
+                   and ranked lower) until a technician reviews it (see app/core/confirmation.py).
     thumbs down -> a NEW record of the diagnosis + fix that did NOT work (outcome "failed_fix"). It
                    deletes nothing, leaves the ticket's review status alone (a technician can still
                    confirm or correct it), and blocks nothing: later diagnoses of similar problems are
@@ -22,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import KnowledgeBaseUpdateError
 from app.models.ticket import Feedback, Ticket
-from app.schemas.enums import KnowledgeOutcome, ReviewStatus
+from app.schemas.enums import ConfirmationSource, FixVerification, KnowledgeOutcome, ReviewStatus
 from app.services.knowledge_base_service import KnowledgeBaseService
 from app.services.review_service import ReviewService
 from app.services.ticket_service import TicketService
@@ -37,6 +39,8 @@ class FeedbackOutcome:
     knowledge_base_outcome: KnowledgeOutcome | None  # what the knowledge base now holds for this verdict
     knowledge_base_updated: bool  # whether THIS request wrote to the knowledge base
     kb_record_id: str | None
+    verification: str | None = None  # "verified" / "provisional" for the fix a thumbs-up confirmed
+    confirmation_count: int | None = None
 
 
 class FeedbackService:
@@ -65,10 +69,11 @@ class FeedbackService:
         updated = False
         if ticket.review_status == ReviewStatus.PENDING:
             try:
-                self._reviews.confirm(ticket.id)  # writes the verified_fix record, then commits
+                # An end user's click is one confirmation, so the record starts out provisional.
+                self._reviews.confirm(ticket.id, source=ConfirmationSource.USER)
                 updated = True
             except KnowledgeBaseUpdateError:
-                logger.warning("feedback_knowledge_base_update_failed", extra={"ticket_id": ticket.id, "outcome": "verified_fix"})
+                logger.warning("feedback_knowledge_base_update_failed", extra={"ticket_id": ticket.id, "outcome": "confirmed_fix"})
         self._retract_failed_record(ticket)
 
         if ticket.review_status == ReviewStatus.CORRECTED:
@@ -76,12 +81,18 @@ class FeedbackService:
             # diagnosis must not override that, so nothing is written.
             return FeedbackOutcome(feedback, created, None, False, None)
         confirmed = ticket.review_status == ReviewStatus.CONFIRMED
+        outcome = None
+        if confirmed:
+            provisional = ticket.fix_verification == FixVerification.PROVISIONAL.value
+            outcome = KnowledgeOutcome.PROVISIONAL_FIX if provisional else KnowledgeOutcome.VERIFIED_FIX
         return FeedbackOutcome(
             feedback,
             created,
-            KnowledgeOutcome.VERIFIED_FIX if confirmed else None,
+            outcome,
             updated,
             ticket.kb_record_id if confirmed else None,
+            verification=ticket.fix_verification if confirmed else None,
+            confirmation_count=ticket.confirmation_count if confirmed else None,
         )
 
     def _retract_failed_record(self, ticket: Ticket) -> None:

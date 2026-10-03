@@ -3,13 +3,15 @@
 Every record in the vector store is one of three kinds:
 
 * ``source: seed``                              - shipped with the system (``data/knowledge_base.json``)
-* ``source: verified``, ``outcome: verified_fix`` - a ticket whose fix was confirmed to work (thumbs up,
-  a technician's confirm or correction, or a resolved session); built by ``upsert_ticket_case``
+* ``source: verified``                           - a ticket whose fix was confirmed to work (thumbs up, a
+  technician's confirm or correction, or a resolved session); built by ``upsert_ticket_case``. It is
+  ``outcome: verified_fix`` once it has enough confirmations (a technician's review, or 2+), and only
+  ``outcome: provisional_fix`` while it has fewer (see app/core/confirmation.py)
 * ``source: feedback``, ``outcome: failed_fix``   - a ticket whose diagnosis + fix a user reported did
   NOT work (thumbs down); built by ``upsert_failed_case``
 
-Seed and verified records are what retrieval offers the LLM as *working* fixes; failed records are
-offered separately, labelled as approaches that did not work. This service is the ONLY code that
+Seed, verified and provisional records are what retrieval offers the LLM as *working* fixes (provisional ones
+are labelled and ranked lower); failed records are offered separately, labelled as approaches that did not work. This service is the ONLY code that
 writes feedback records. A ticket that is still ``pending`` never becomes a verified record.
 """
 
@@ -20,10 +22,11 @@ from datetime import datetime, timezone
 
 from chromadb.api.models.Collection import Collection
 
+from app.core.confirmation import confirmation_count, effective_sources
 from app.core.exceptions import KnowledgeBaseUpdateError
 from app.db.seed import embedding_text
 from app.models.ticket import Ticket
-from app.schemas.enums import KnowledgeOutcome, ReviewStatus
+from app.schemas.enums import FixVerification, KnowledgeOutcome, ReviewStatus
 from app.schemas.review import KnowledgeBaseStats
 from app.services.embedding_service import Embedder
 
@@ -66,9 +69,10 @@ class KnowledgeBaseService:
         return f"{FAILED_ID_PREFIX}{ticket_id}-{uuid.uuid4().hex[:6]}"
 
     def upsert_ticket_case(self, ticket: Ticket) -> None:
-        """Insert or update the "verified_fix" record built from a reviewed ticket.
+        """Insert or update the confirmed-fix record built from a reviewed ticket.
 
-        The ticket must already carry its review fields (status, correction, kb_record_id).
+        The ticket must already carry its review fields (status, correction, kb_record_id, and who confirmed it,
+        which decides whether the record is "verified_fix" or only "provisional_fix").
         Raises ``KnowledgeBaseUpdateError`` if the vector store fails.
         """
         if ticket.review_status == ReviewStatus.PENDING or not ticket.kb_record_id:
@@ -77,6 +81,10 @@ class KnowledgeBaseService:
         root_cause, fix = case_content_for(ticket)
         issue = issue_text_for(ticket)
         equipment_type = ticket.review_equipment_type or "unspecified"
+        # A ticket reviewed before the safeguard existed has no stored verdict and stays verified.
+        verification = FixVerification(ticket.kb_verification) if ticket.kb_verification else FixVerification.VERIFIED
+        outcome = KnowledgeOutcome.VERIFIED_FIX if verification == FixVerification.VERIFIED else KnowledgeOutcome.PROVISIONAL_FIX
+        sources = effective_sources(ticket.confirmation_sources, reviewed=True)
         self._write(
             ticket.kb_record_id,
             embedding_text(equipment_type, issue),
@@ -88,7 +96,10 @@ class KnowledgeBaseService:
                 "recommended_fix": fix,
                 "severity": ticket.severity.value,
                 "source": "verified",
-                "outcome": KnowledgeOutcome.VERIFIED_FIX.value,
+                "outcome": outcome.value,
+                "verification": verification.value,
+                "confirmation_count": confirmation_count(sources),
+                "confirmed_by": ",".join(sorted(sources)),
                 "ticket_id": ticket.id,
                 "review_status": ticket.review_status.value,
                 "verified_at": (ticket.reviewed_at or datetime.now(timezone.utc)).isoformat(),
@@ -97,7 +108,12 @@ class KnowledgeBaseService:
         )
         logger.info(
             "knowledge_base_case_added",
-            extra={"ticket_id": ticket.id, "record_id": ticket.kb_record_id, "review_status": ticket.review_status.value},
+            extra={
+                "ticket_id": ticket.id,
+                "record_id": ticket.kb_record_id,
+                "review_status": ticket.review_status.value,
+                "verification": verification.value,
+            },
         )
 
     def upsert_failed_case(self, ticket: Ticket) -> None:
@@ -183,9 +199,15 @@ class KnowledgeBaseService:
         return True
 
     def stats(self) -> KnowledgeBaseStats:
-        """Counts of seed, verified (working) and failed records, so the growth is visible."""
+        """Counts of seed, verified, provisional and failed records, so the growth is visible."""
+        provisional_outcome = KnowledgeOutcome.PROVISIONAL_FIX.value
         try:
-            verified = self._collection.get(where={"source": "verified"}, include=["metadatas"])
+            # "verified" = confirmed fixes that are not provisional. `$ne` keeps records that have no outcome at
+            # all (written before outcomes existed), so those stay verified; a test pins this against real Chroma.
+            verified = self._collection.get(
+                where={"$and": [{"source": "verified"}, {"outcome": {"$ne": provisional_outcome}}]}, include=["metadatas"]
+            )
+            provisional = self._collection.get(where={"outcome": provisional_outcome}, include=[])
             failed = self._collection.get(where={"outcome": KnowledgeOutcome.FAILED_FIX.value}, include=[])
             total = self._collection.count()
         except Exception as exc:
@@ -193,15 +215,16 @@ class KnowledgeBaseService:
             raise KnowledgeBaseUpdateError("The knowledge base is unavailable.") from exc
 
         statuses = [(metadata or {}).get("review_status") for metadata in (verified.get("metadatas") or [])]
-        verified_count, failed_count = len(verified["ids"]), len(failed["ids"])
+        verified_count, provisional_count, failed_count = len(verified["ids"]), len(provisional["ids"]), len(failed["ids"])
         return KnowledgeBaseStats(
             total=total,
             # records stored before "source" existed have none and count as seed
-            seed=total - verified_count - failed_count,
+            seed=total - verified_count - provisional_count - failed_count,
             verified=verified_count,
             verified_confirmed=statuses.count(ReviewStatus.CONFIRMED.value),
             verified_corrected=statuses.count(ReviewStatus.CORRECTED.value),
             failed=failed_count,
+            provisional=provisional_count,
         )
 
     def restore_missing(self, tickets: Iterable[Ticket]) -> int:

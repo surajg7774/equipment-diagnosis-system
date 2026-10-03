@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.enums import KnowledgeOutcome, Severity
+from app.schemas.enums import FixVerification, KnowledgeOutcome, Severity
 
 
 class KnowledgeBaseRecord(BaseModel):
@@ -28,9 +28,18 @@ class KnowledgeBaseRecord(BaseModel):
     outcome: KnowledgeOutcome | None = Field(
         default=None,
         description=(
-            "'verified_fix' = the fix worked; 'failed_fix' = it was suggested and did NOT work. "
+            "'verified_fix' = the fix is confirmed to work; 'provisional_fix' = confirmed once but not verified yet; "
+            "'failed_fix' = it was suggested and did NOT work. "
             "Null for seed records (curated resolved cases, treated as working fixes)."
         ),
+    )
+    verification: FixVerification | None = Field(
+        default=None,
+        description="'verified' or 'provisional' for a confirmed fix learned from feedback; null for seed and failed records.",
+    )
+    confirmation_count: int | None = Field(
+        default=None,
+        description="Total confirmation weight behind a learned fix (a user's click counts 1, a technician's review 2).",
     )
 
 

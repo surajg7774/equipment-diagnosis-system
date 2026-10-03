@@ -47,6 +47,10 @@ services:
         value: "true"
       - key: MAX_SOLUTION_ATTEMPTS  # different solutions per problem before "escalate to a human technician"
         value: "4"
+      # Confirmations a fix needs to count as VERIFIED: a user's click = 1, a technician's review = 2. With 2 a lone
+      # click stays "provisional". KILL SWITCH: set this to 1 in the dashboard and redeploy to get the old behaviour.
+      - key: MIN_CONFIRMATIONS_TO_VERIFY
+        value: "2"
       - key: RATE_LIMIT_PER_MINUTE  # per client, on /diagnose, /diagnose-image and each "No" in a session; 0 turns it off
         value: "10"
       # Render's proxy puts the caller's address into X-Forwarded-For. 1 = "trust the last entry".

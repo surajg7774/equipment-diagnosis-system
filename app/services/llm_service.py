@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from app.core.config import Settings
 from app.core.exceptions import LLMResponseError, LLMUnavailableError
 from app.schemas.diagnosis import ImageFindings
-from app.schemas.enums import Severity
+from app.schemas.enums import KnowledgeOutcome, Severity
 from app.schemas.knowledge_base import SimilarCase
 
 logger = logging.getLogger(__name__)
@@ -194,9 +194,15 @@ Respond with a JSON object with exactly these fields:
 - "confidence": an integer from 0 to 100 (digits only, for example 70, never words): how certain you are that your root_cause and recommended_fix are correct, given only the information in the report. Judge your own certainty. Do NOT base it on whether similar past cases were provided. A clear, specific report of a well-known fault deserves a high value; a vague, ambiguous or unusual report deserves a lower one. Avoid defaulting to the same number every time."""
 
 
+def _is_provisional(case: SimilarCase) -> bool:
+    return case.outcome == KnowledgeOutcome.PROVISIONAL_FIX
+
+
 def _format_case(index: int, case: SimilarCase) -> str:
+    # A fix confirmed only once is marked, so the model can weigh it less than a verified or seed case.
+    provisional = " [PROVISIONAL: confirmed only once so far, not yet verified]" if _is_provisional(case) else ""
     return (
-        f"Case {index} - {case.equipment_type} (past severity: {case.severity.value})\n"
+        f"Case {index} - {case.equipment_type} (past severity: {case.severity.value}){provisional}\n"
         f"  Problem: {case.issue_description}\n"
         f"  Root cause: {case.root_cause}\n"
         f"  Fix: {case.recommended_fix}"
@@ -288,6 +294,12 @@ def build_messages(
             f"Similar past cases with CONFIRMED WORKING fixes, most similar first:\n\n{cases}\n\n"
             "Use them as reference examples, NOT as the answer: draw on a case only where it is "
             "genuinely relevant to the new issue, ignore any that are not, and do not copy their wording."
+            + (
+                " Cases marked PROVISIONAL were confirmed only once and are not yet verified: give them less "
+                "weight than the unmarked cases."
+                if any(_is_provisional(c) for c in context_examples)
+                else ""
+            )
         )
     else:
         sections.append(

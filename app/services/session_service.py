@@ -27,7 +27,7 @@ from app.core.exceptions import (
 )
 from app.models.ticket import DiagnosisSession, SolutionAttempt, Ticket
 from app.schemas.diagnosis import DiagnoseResponse, ImageFindings
-from app.schemas.enums import DiagnosisBasis, ReviewStatus, SessionStatus
+from app.schemas.enums import ConfirmationSource, DiagnosisBasis, ReviewStatus, SessionStatus
 from app.services.diagnosis_service import DiagnosisResult, DiagnosisService
 from app.services.llm_service import PreviousAttempt
 from app.services.review_service import ReviewService
@@ -48,6 +48,7 @@ class FeedbackOutcome:
     message: str | None
     escalate: bool = False
     added_to_knowledge_base: bool = False
+    verification: str | None = None  # "provisional" (an end user's yes alone) / "verified", when something was added
     next_result: DiagnosisResult | None = None  # the new solution, when "no" produced one
     next_attempt: SolutionAttempt | None = None
 
@@ -203,12 +204,13 @@ class SessionService:
             "session_resolved",
             extra={"session_id": session.session_id, "attempts": session.attempt_count},
         )
-        added = self._maybe_add_to_knowledge_base(session, latest)
+        verification = self._maybe_add_to_knowledge_base(session, latest)
         return FeedbackOutcome(
             session=session,
             rated_attempt=latest,
             message=self._resolved_message(session),
-            added_to_knowledge_base=added,
+            added_to_knowledge_base=verification is not None,
+            verification=verification,
         )
 
     @staticmethod
@@ -216,29 +218,34 @@ class SessionService:
         count = session.attempt_count
         return f"Resolved after {count} attempt{'s' if count != 1 else ''}. Glad that fixed it!"
 
-    def _maybe_add_to_knowledge_base(self, session: DiagnosisSession, winner: SolutionAttempt) -> bool:
+    def _maybe_add_to_knowledge_base(self, session: DiagnosisSession, winner: SolutionAttempt) -> str | None:
         """Feed a trusted, working solution into the existing human-in-the-loop knowledge-base logic.
+
+        Returns the fix's verification ("provisional" or "verified") when it was added, else None.
 
         Attempt 1 is what the ticket already says, so it is a plain *confirmation*. A later attempt
         differs from the ticket, so it is recorded as a *correction* carrying that attempt's text.
-        A ticket a technician already reviewed is left alone. The session is already resolved at this
-        point, so a vector-store failure is logged and reported, not raised.
+        Either way it is an END USER's "yes": one confirmation, so the record starts out PROVISIONAL
+        until a technician reviews it. A ticket a technician already reviewed is left alone. The session
+        is already resolved at this point, so a vector-store failure is logged and reported, not raised.
         """
         ticket = session.ticket
         if ticket is None or ticket.review_status != ReviewStatus.PENDING:
-            return False
+            return None
         if not is_trusted_solution(winner):
             logger.info("session_solution_not_trusted", extra={"session_id": session.session_id})
-            return False
+            return None
         try:
             if winner.attempt_number == 1:
-                self._reviews.confirm(ticket.id, session.equipment_type)
+                self._reviews.confirm(ticket.id, session.equipment_type, source=ConfirmationSource.USER)
             else:
-                self._reviews.correct(ticket.id, winner.diagnosis, winner.recommended_action, session.equipment_type)
+                self._reviews.correct(
+                    ticket.id, winner.diagnosis, winner.recommended_action, session.equipment_type, source=ConfirmationSource.USER
+                )
         except KnowledgeBaseUpdateError:
             logger.warning("session_knowledge_base_add_failed", extra={"session_id": session.session_id})
-            return False
-        return True
+            return None
+        return ticket.fix_verification
 
     def _try_next_solution(
         self,

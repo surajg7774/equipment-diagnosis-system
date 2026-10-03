@@ -82,8 +82,9 @@ def get_knowledge_base_service(request: Request) -> KnowledgeBaseService:
 def get_review_service(
     db: Annotated[Session, Depends(get_db)],
     knowledge_base: Annotated[KnowledgeBaseService, Depends(get_knowledge_base_service)],
+    settings: Annotated[Settings, Depends(get_settings_dep)],
 ) -> ReviewService:
-    return ReviewService(db, knowledge_base)
+    return ReviewService(db, knowledge_base, settings.min_confirmations_to_verify)
 
 
 def get_feedback_service(

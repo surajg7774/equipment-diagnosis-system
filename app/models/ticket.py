@@ -11,8 +11,9 @@ from datetime import datetime, timezone
 from sqlalchemy import JSON, Boolean, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.confirmation import confirmation_count, effective_sources
 from app.db.base import Base, UTCDateTime
-from app.schemas.enums import ReviewPriority, ReviewStatus, SessionStatus, Severity
+from app.schemas.enums import FixVerification, ReviewPriority, ReviewStatus, SessionStatus, Severity
 
 
 def _utcnow() -> datetime:
@@ -71,6 +72,11 @@ class Ticket(Base):
     # The "failed_fix" record created by a thumbs-down on this ticket (the AI's diagnosis did not work).
     # Separate from kb_record_id: a ticket can later ALSO get a verified record (e.g. a technician's correction).
     failed_kb_record_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Who has confirmed the CURRENT content of this ticket's fix ("user" and/or "technician") and whether that is
+    # enough for it to count as verified or only provisional (see app/core/confirmation.py). Both are null for
+    # tickets reviewed before the safeguard existed; those keep their verified status.
+    confirmation_sources: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    kb_verification: Mapped[str | None] = mapped_column(String(12), nullable=True)
 
     feedback: Mapped["Feedback | None"] = relationship(
         back_populates="ticket", uselist=False, cascade="all, delete-orphan"
@@ -85,6 +91,23 @@ class Ticket(Base):
     def feedback_was_correct(self) -> bool | None:
         """Convenience for the API schema: the feedback verdict, if any."""
         return self.feedback.was_correct if self.feedback else None
+
+    @property
+    def fix_verification(self) -> str | None:
+        """"verified" / "provisional" for a ticket whose fix is in the knowledge base; null if it has none.
+
+        A ticket reviewed before the safeguard existed has no stored value and counts as verified.
+        """
+        if self.kb_verification:
+            return self.kb_verification
+        return FixVerification.VERIFIED.value if self.kb_record_id else None
+
+    @property
+    def confirmation_count(self) -> int | None:
+        """The total confirmation weight behind this ticket's fix, or null if it is not in the knowledge base."""
+        if not self.kb_record_id:
+            return None
+        return confirmation_count(effective_sources(self.confirmation_sources, reviewed=True))
 
 
 class Feedback(Base):

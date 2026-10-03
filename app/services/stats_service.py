@@ -45,6 +45,7 @@ def build_stats(summary: dict[str, Any], knowledge_base: KnowledgeBaseStats | No
         original_seed_count=knowledge_base.seed if knowledge_base else None,
         technician_verified_count=knowledge_base.verified if knowledge_base else None,
         verified_fix_count=knowledge_base.verified if knowledge_base else None,
+        provisional_fix_count=knowledge_base.provisional if knowledge_base else None,
         failed_fix_count=knowledge_base.failed if knowledge_base else None,
         review=ReviewCounts(
             pending=review.get("pending", 0),

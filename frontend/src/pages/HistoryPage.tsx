@@ -37,7 +37,14 @@ interface Outcome {
 /** The review fields a confirm/correct changes: applied locally so the row updates instantly. */
 type ReviewPatch = Pick<
   HistoryItem,
-  'review_status' | 'review_priority' | 'corrected_root_cause' | 'corrected_fix' | 'reviewed_at' | 'kb_record_id'
+  | 'review_status'
+  | 'review_priority'
+  | 'corrected_root_cause'
+  | 'corrected_fix'
+  | 'reviewed_at'
+  | 'kb_record_id'
+  | 'kb_verification'
+  | 'confirmation_count'
 >
 
 function parseFilter(value: string | null): ReviewStatus | null {
@@ -112,6 +119,8 @@ export function HistoryPage() {
         corrected_fix: response.corrected_fix,
         reviewed_at: response.reviewed_at,
         kb_record_id: response.kb_record_id,
+        kb_verification: response.verification ?? null,
+        confirmation_count: response.confirmation_count ?? null,
       },
     }))
     setKbStats(response.knowledge_base)
@@ -241,12 +250,22 @@ export function HistoryPage() {
                         <td className="whitespace-nowrap px-4 py-3 text-slate-600">{formatDateTime(item.created_at)}</td>
                         <td className="min-w-48 px-4 py-3">
                           <ReviewBadge status={item.review_status} priority={item.review_priority} />
+                          {item.kb_verification === 'provisional' && (
+                            <span
+                              className="ml-1.5 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-900 ring-1 ring-inset ring-amber-400/60"
+                              title="Confirmed once by an end user. Not verified until a technician reviews it."
+                              data-testid="provisional-chip"
+                            >
+                              Provisional
+                            </span>
+                          )}
                           {item.reviewed_at && (
                             <p className="mt-1 text-[11px] text-slate-500">{formatDateTime(item.reviewed_at)}</p>
                           )}
                           <ReviewActions
                             ticketId={item.id}
                             status={item.review_status}
+                            verification={item.kb_verification}
                             onReviewed={(response) => onReviewed(item.id, response)}
                             onCorrect={() => {
                               setEditingId(item.id)

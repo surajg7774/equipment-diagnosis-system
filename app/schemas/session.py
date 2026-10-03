@@ -36,6 +36,11 @@ class SessionFeedbackResponse(BaseModel):
         default=False,
         description="True when a 'yes' on a reasonably trusted solution was added to the knowledge base for future retrieval.",
     )
+    knowledge_base_verification: str | None = Field(
+        default=None,
+        description="'provisional' for a fix added from an end user's 'yes' alone (it becomes verified once a technician "
+        "reviews it), 'verified' otherwise; null when nothing was added.",
+    )
     next_attempt: DiagnoseResponse | None = Field(
         default=None,
         description="The new, different solution (same shape as /diagnose, with its own attempt_number); null when resolved or escalated.",

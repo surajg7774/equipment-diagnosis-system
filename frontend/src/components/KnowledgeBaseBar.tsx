@@ -1,11 +1,17 @@
 import type { KnowledgeBaseStats } from '../types/api'
 import { DatabaseIcon } from './icons'
 
-/** Makes the knowledge base's growth visible: shipped seed records vs technician-verified ones. */
+/**
+ * Makes the knowledge base's growth visible: shipped seed records, verified fixes, provisional ones (confirmed
+ * once, not yet verified by a technician) and fixes reported not to work.
+ */
 export function KnowledgeBaseBar({ stats }: { stats: KnowledgeBaseStats }) {
   const failed = stats.failed ?? 0 // absent on a backend that predates thumbs-down learning
-  const verifiedShare = stats.total === 0 ? 0 : (stats.verified / stats.total) * 100
-  const failedShare = stats.total === 0 ? 0 : (failed / stats.total) * 100
+  const provisional = stats.provisional ?? 0 // absent on a backend that predates the confirmation safeguard
+  const share = (n: number) => (stats.total === 0 ? 0 : (n / stats.total) * 100)
+  const verifiedShare = share(stats.verified)
+  const provisionalShare = share(provisional)
+  const failedShare = share(failed)
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="kb-stats">
@@ -25,7 +31,7 @@ export function KnowledgeBaseBar({ stats }: { stats: KnowledgeBaseStats }) {
             </dd>
           </div>
           <div className="flex items-baseline gap-1.5">
-            <dt className="text-slate-500">Confirmed working fixes</dt>
+            <dt className="text-slate-500">Verified fixes</dt>
             <dd className="font-semibold tabular-nums text-accent-700" data-testid="kb-verified">
               {stats.verified}
             </dd>
@@ -33,6 +39,14 @@ export function KnowledgeBaseBar({ stats }: { stats: KnowledgeBaseStats }) {
               ({stats.verified_confirmed} confirmed · {stats.verified_corrected} corrected)
             </dd>
           </div>
+          {provisional > 0 && (
+            <div className="flex items-baseline gap-1.5" title="Confirmed once by an end user; a technician has not verified them yet">
+              <dt className="text-slate-500">Provisional (confirmed once)</dt>
+              <dd className="font-semibold tabular-nums text-sky-700" data-testid="kb-provisional">
+                {provisional}
+              </dd>
+            </div>
+          )}
           {failed > 0 && (
             <div className="flex items-baseline gap-1.5">
               <dt className="text-slate-500">Fixes that did not work</dt>
@@ -46,15 +60,17 @@ export function KnowledgeBaseBar({ stats }: { stats: KnowledgeBaseStats }) {
       <div
         className="mt-2.5 flex h-2 overflow-hidden rounded-full bg-slate-200"
         role="img"
-        aria-label={`${stats.seed} seed records, ${stats.verified} confirmed working fixes and ${failed} fixes that did not work`}
+        aria-label={`${stats.seed} seed records, ${stats.verified} verified fixes, ${provisional} provisional fixes and ${failed} fixes that did not work`}
       >
-        <div className="h-full bg-slate-400" style={{ width: `${100 - verifiedShare - failedShare}%` }} />
+        <div className="h-full bg-slate-400" style={{ width: `${100 - verifiedShare - provisionalShare - failedShare}%` }} />
         <div className="h-full bg-accent-500 transition-[width] duration-500" style={{ width: `${verifiedShare}%` }} />
+        <div className="h-full bg-sky-300 transition-[width] duration-500" style={{ width: `${provisionalShare}%` }} />
         <div className="h-full bg-amber-400 transition-[width] duration-500" style={{ width: `${failedShare}%` }} />
       </div>
       <p className="mt-1.5 text-xs text-slate-500">
-        Confirming or correcting a diagnosis below (or a thumbs up) adds it here as a working fix; a thumbs down records a
-        fix that did not work, so similar future reports avoid repeating it.
+        A technician&apos;s Confirm or Correct adds a verified fix. A user&apos;s thumbs up or &quot;Yes&quot; adds a
+        provisional one (still used, with less weight) until a technician verifies it. A thumbs down records a fix that
+        did not work, so similar future reports avoid repeating it.
       </p>
     </div>
   )

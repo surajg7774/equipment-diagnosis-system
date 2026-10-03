@@ -29,6 +29,13 @@ class HistoryItem(BaseModel):
     corrected_fix: str | None = Field(default=None, description="The technician's fix, if corrected.")
     reviewed_at: datetime | None = None
     kb_record_id: str | None = Field(default=None, description="Knowledge-base record built from this ticket, if reviewed.")
+    # Read from Ticket.fix_verification: "verified" / "provisional" / null (no record yet).
+    kb_verification: str | None = Field(
+        default=None,
+        validation_alias="fix_verification",
+        description="Whether the fix in the knowledge base is 'verified' or still 'provisional' (confirmed only once).",
+    )
+    confirmation_count: int | None = Field(default=None, description="Total confirmation weight behind that fix.")
     # Read from the ORM relationship `Ticket.diagnosis_session`; null for photo tickets and tickets from before sessions.
     session: SessionOut | None = Field(
         default=None,
@@ -100,9 +107,14 @@ class FeedbackResponse(BaseModel):
         description=(
             "What the knowledge base now holds for this verdict: 'verified_fix' (thumbs up: a confirmed working "
             "fix), 'failed_fix' (thumbs down: a fix that did NOT work), or null if nothing was recorded "
-            "(e.g. a technician already corrected the ticket, or the vector store was unavailable)."
+            "(e.g. a technician already corrected the ticket, or the vector store was unavailable). "
+            "'provisional_fix' = recorded, but confirmed only once so it is not verified yet."
         ),
     )
+    verification: str | None = Field(
+        default=None, description="'verified' or 'provisional' for the fix this verdict confirmed (thumbs up only)."
+    )
+    confirmation_count: int | None = Field(default=None, description="Total confirmation weight behind that fix.")
     knowledge_base_updated: bool = Field(
         default=False, description="Whether THIS request wrote to the knowledge base (false for a repeated verdict)."
     )

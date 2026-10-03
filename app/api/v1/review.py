@@ -29,6 +29,8 @@ def _response(ticket: Ticket, knowledge_base: KnowledgeBaseDep) -> ReviewRespons
         corrected_fix=ticket.corrected_fix,
         added_to_knowledge_base=ticket.kb_record_id is not None,
         kb_record_id=ticket.kb_record_id,
+        verification=ticket.fix_verification,
+        confirmation_count=ticket.confirmation_count,
         knowledge_base=knowledge_base.stats(),
     )
 
@@ -39,7 +41,9 @@ def _response(ticket: Ticket, knowledge_base: KnowledgeBaseDep) -> ReviewRespons
     summary="Confirm that the AI's diagnosis was correct",
     description=(
         "Marks the ticket `confirmed` and adds the original AI diagnosis to the knowledge base as a "
-        "`verified` record, so future similar reports can retrieve it. Confirming twice is harmless. "
+        "`verified` record, so future similar reports can retrieve it. A technician's review counts as two "
+        "confirmations, so it verifies the fix; on a fix an end user already confirmed (still `provisional`) it "
+        "upgrades the SAME record to `verified`. Confirming twice is harmless. "
         "A ticket that was already corrected cannot be confirmed (409)."
     ),
     responses=_REVIEW_ERRORS,
@@ -79,9 +83,10 @@ def correct_ticket(
 @router.get(
     "/knowledge-base/stats",
     response_model=KnowledgeBaseStats,
-    summary="How many knowledge-base records are seed vs technician-verified",
+    summary="How many knowledge-base records are seed, verified, provisional or failed",
     description="Makes the growth of the knowledge base visible: seed records ship with the system, "
-    "verified records come from confirmed or corrected tickets.",
+    "verified records are confirmed fixes with enough confirmations, provisional ones were confirmed only once "
+    "(an end user's click) and failed ones were reported not to work.",
     responses={503: {"model": ErrorResponse, "description": "The knowledge base is unavailable."}},
 )
 def knowledge_base_stats(knowledge_base: KnowledgeBaseDep) -> KnowledgeBaseStats:

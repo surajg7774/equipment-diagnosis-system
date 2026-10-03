@@ -191,13 +191,15 @@ def test_an_unconfirmed_ticket_is_not_retrieved_later(client):
     assert client.get("/api/v1/knowledge-base/stats").json()["verified"] == 0
 
 
-def test_a_thumbs_up_now_adds_the_diagnosis_to_the_knowledge_base(client):
-    # Changed on purpose: feedback now teaches the knowledge base in both directions (see test_feedback_kb.py).
+def test_a_thumbs_up_adds_the_diagnosis_to_the_knowledge_base_as_provisional(client):
+    # Feedback teaches the knowledge base in both directions (see test_feedback_kb.py), but one end-user click is
+    # only one confirmation, so the fix is provisional until a technician verifies it (see test_confirmations.py).
     ticket_id = _diagnose(client)["ticket_id"]
 
     client.post("/api/v1/feedback", json={"ticket_id": ticket_id, "was_correct": True})
 
-    assert client.get("/api/v1/knowledge-base/stats").json()["verified"] == 1
+    stats = client.get("/api/v1/knowledge-base/stats").json()
+    assert (stats["provisional"], stats["verified"]) == (1, 0)
 
 
 # --- statistics -------------------------------------------------------------------------------------------------------------------------
@@ -210,7 +212,8 @@ def test_stats_report_seed_versus_verified_records(client):
     client.post(f"/api/v1/tickets/{b}/correct", json={"root_cause": "Worn mechanical seal.", "recommended_fix": "Replace the seal."})
 
     stats = client.get("/api/v1/knowledge-base/stats").json()
-    assert stats == {"total": 30, "seed": 28, "verified": 2, "verified_confirmed": 1, "verified_corrected": 1, "failed": 0}
+    # Technician reviews are worth two confirmations, so both are verified (provisional is the new, additive key).
+    assert stats == {"total": 30, "seed": 28, "verified": 2, "verified_confirmed": 1, "verified_corrected": 1, "failed": 0, "provisional": 0}
 
 
 def test_openapi_documents_the_review_endpoints(client):

@@ -10,7 +10,7 @@ import { CheckCircleIcon, InfoIcon, SpinnerIcon } from './icons'
 type Phase =
   | { kind: 'asking' } // a solution is showing and we are waiting for the user's answer
   | { kind: 'working'; verdict: boolean } // an answer is being sent (a "no" waits for a new LLM solution)
-  | { kind: 'resolved'; message: string | null; addedToKb: boolean }
+  | { kind: 'resolved'; message: string | null; addedToKb: boolean; provisional: boolean }
   | { kind: 'escalated'; message: string | null }
 
 /**
@@ -61,7 +61,13 @@ export function SessionFlow({ first }: { first: DiagnoseResponse }) {
         setAttempts((all) => [...all, response.next_attempt!])
         setPhase({ kind: 'asking' })
       } else if (response.resolved) {
-        setPhase({ kind: 'resolved', message: response.message, addedToKb: response.added_to_knowledge_base })
+        setPhase({
+          kind: 'resolved',
+          message: response.message,
+          addedToKb: response.added_to_knowledge_base,
+          // An end user's "yes" alone is one confirmation: the fix is saved as provisional until a technician verifies it.
+          provisional: response.knowledge_base_verification === 'provisional',
+        })
       } else if (response.escalate) {
         setPhase({ kind: 'escalated', message: response.message })
       } else {
@@ -94,7 +100,9 @@ export function SessionFlow({ first }: { first: DiagnoseResponse }) {
             </p>
             {phase.addedToKb && (
               <p className="mt-1 text-xs text-emerald-800/80" data-testid="added-to-kb">
-                This solution was added to the knowledge base to help with similar problems.
+                {phase.provisional
+                  ? 'This solution was saved to the knowledge base as provisional (confirmed once). It counts as verified once a technician reviews it.'
+                  : 'This solution was added to the knowledge base to help with similar problems.'}
               </p>
             )}
           </div>

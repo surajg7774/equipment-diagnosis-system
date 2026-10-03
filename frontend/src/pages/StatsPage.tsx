@@ -108,7 +108,7 @@ function StatsDashboard({ stats }: { stats: StatsResponse }) {
           value={kbAvailable ? String(stats.knowledge_base_size) : NO_VALUE}
           hint={
             kbAvailable
-              ? `${stats.original_seed_count} seed · ${stats.verified_fix_count ?? stats.technician_verified_count} verified · ${stats.failed_fix_count ?? 0} failed`
+              ? `${stats.original_seed_count} seed · ${stats.verified_fix_count ?? stats.technician_verified_count} verified · ${stats.provisional_fix_count ?? 0} provisional · ${stats.failed_fix_count ?? 0} failed`
               : 'Unavailable right now'
           }
           testId="stat-kb"
@@ -154,13 +154,15 @@ function StatsDashboard({ stats }: { stats: StatsResponse }) {
                 parts={[
                   { label: 'Original seed', value: stats.original_seed_count ?? 0, className: 'bg-slate-400' },
                   { label: 'Verified fixes', value: stats.verified_fix_count ?? stats.technician_verified_count ?? 0, className: 'bg-accent-500' },
+                  { label: 'Provisional fixes', value: stats.provisional_fix_count ?? 0, className: 'bg-sky-300' },
                   { label: 'Failed fixes', value: stats.failed_fix_count ?? 0, className: 'bg-amber-400' },
                 ]}
-                ariaLabel={`${stats.original_seed_count} seed records, ${stats.verified_fix_count ?? stats.technician_verified_count} verified fixes and ${stats.failed_fix_count ?? 0} failed fixes`}
+                ariaLabel={`${stats.original_seed_count} seed records, ${stats.verified_fix_count ?? stats.technician_verified_count} verified fixes, ${stats.provisional_fix_count ?? 0} provisional fixes and ${stats.failed_fix_count ?? 0} failed fixes`}
               />
               <dl className="mt-3 space-y-1.5 text-sm">
                 <Row label="Original seed" dotClass="bg-slate-400" value={String(stats.original_seed_count)} testId="kb-seed-count" />
-                <Row label="Verified fixes (worked)" dotClass="bg-accent-500" value={String(stats.verified_fix_count ?? stats.technician_verified_count)} testId="kb-verified-count" />
+                <Row label="Verified fixes" dotClass="bg-accent-500" value={String(stats.verified_fix_count ?? stats.technician_verified_count)} testId="kb-verified-count" />
+                <Row label="Provisional (confirmed once)" dotClass="bg-sky-300" value={String(stats.provisional_fix_count ?? 0)} testId="kb-provisional-count" />
                 <Row label="Failed fixes (did not work)" dotClass="bg-amber-400" value={String(stats.failed_fix_count ?? 0)} testId="kb-failed-count" />
               </dl>
             </>

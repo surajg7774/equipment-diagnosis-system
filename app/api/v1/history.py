@@ -44,8 +44,9 @@ def list_history(
     summary="Thumbs up / down on a diagnosis (teaches the knowledge base)",
     description=(
         "Stores the verdict for a ticket, then teaches the knowledge base. **Thumbs up** "
-        "(`was_correct: true`) adds the AI's diagnosis as a confirmed working fix (`verified_fix`), "
-        "like a technician's confirm. **Thumbs down** adds a separate `failed_fix` record of the "
+        "(`was_correct: true`) records the AI's diagnosis as a confirmed fix, like a technician's confirm, "
+        "but one end-user click is only one confirmation: it is stored as `provisional_fix` (retrieved, "
+        "labelled and ranked lower) until a technician verifies it. **Thumbs down** adds a separate `failed_fix` record of the "
         "diagnosis + fix that did NOT work; it deletes nothing and does not mark the ticket reviewed. "
         "Later diagnoses of similar problems show the LLM both kinds, clearly labelled, so it steers "
         "away from known failures. Submitting feedback for the same ticket again updates the earlier "
@@ -73,4 +74,6 @@ def submit_feedback(
         knowledge_base_outcome=outcome.knowledge_base_outcome,
         knowledge_base_updated=outcome.knowledge_base_updated,
         kb_record_id=outcome.kb_record_id,
+        verification=outcome.verification,
+        confirmation_count=outcome.confirmation_count,
     )

@@ -115,15 +115,16 @@ def test_yes_resolves_the_session_and_stamps_resolved_at(client):
     assert session["attempts_to_resolve"] == 1 and session["attempts"][0]["was_helpful"] is True
 
 
-def test_yes_on_a_trusted_first_solution_confirms_the_ticket_and_adds_it_to_the_knowledge_base(client):
+def test_yes_on_a_trusted_first_solution_confirms_the_ticket_and_adds_it_to_the_knowledge_base_as_provisional(client):
     first = start(client)  # similar_cases basis = trusted
     before = client.get("/api/v1/knowledge-base/stats").json()
 
     body = answer(client, first["session_id"], True).json()
 
     assert body["added_to_knowledge_base"] is True
+    assert body["knowledge_base_verification"] == "provisional"  # one end-user "yes" is not enough to verify it
     after = client.get("/api/v1/knowledge-base/stats").json()
-    assert (after["verified"], after["total"]) == (1, before["total"] + 1)
+    assert (after["provisional"], after["verified"], after["total"]) == (1, 0, before["total"] + 1)
     assert history_item(client, first["ticket_id"])["review_status"] == "confirmed"  # the existing review logic ran
 
 
@@ -355,7 +356,8 @@ def test_repeating_a_yes_is_harmless_and_adds_nothing_twice(client):
     second = answer(client, sid, True)
 
     assert second.status_code == 200 and second.json()["resolved"] is True and second.json()["message"] == first["message"]
-    assert client.get("/api/v1/knowledge-base/stats").json()["verified"] == 1
+    stats = client.get("/api/v1/knowledge-base/stats").json()
+    assert (stats["provisional"], stats["verified"]) == (1, 0)  # one record, and the repeated "yes" did not count twice
 
 
 def test_an_answer_about_an_old_attempt_is_refused_instead_of_skipping_a_solution(client, five_solutions):

@@ -11,8 +11,14 @@ export type DiagnosisBasis = 'similar_cases' | 'general_reasoning'
 /** Where a knowledge-base record came from: shipped 'seed', a confirmed 'verified' fix, or 'feedback' (a fix that did not work). */
 export type KnowledgeBaseSource = 'seed' | 'verified' | 'feedback'
 
-/** Whether a feedback-derived record is a fix that worked or one that did NOT. Seed records have none (= worked). */
-export type KnowledgeOutcome = 'verified_fix' | 'failed_fix'
+/**
+ * What a feedback-derived record is: a fix that is verified to work, one confirmed only once (provisional: still
+ * retrieved, but labelled and ranked lower), or one that did NOT work. Seed records have none (= worked).
+ */
+export type KnowledgeOutcome = 'verified_fix' | 'provisional_fix' | 'failed_fix'
+
+/** How far a confirmed fix has been checked. Null/absent (seed, or older backend) counts as verified. */
+export type FixVerification = 'verified' | 'provisional'
 
 /** Where a ticket is in the technician-verification workflow. */
 export type ReviewStatus = 'pending' | 'confirmed' | 'corrected'
@@ -35,8 +41,11 @@ export interface SimilarCase {
   similarity_score: number
   /** 'verified' = added from a confirmed ticket. Absent on older backends (= seed). */
   source?: KnowledgeBaseSource
-  /** 'failed_fix' = this diagnosis + fix was suggested before and did NOT work. */
+  /** 'failed_fix' = this diagnosis + fix was suggested before and did NOT work; 'provisional_fix' = confirmed once only. */
   outcome?: KnowledgeOutcome | null
+  verification?: FixVerification | null
+  /** Total confirmation weight (an end user's click counts 1, a technician's review 2). */
+  confirmation_count?: number | null
 }
 
 /** What a vision model saw in a photo that was attached to a diagnosis. */
@@ -111,6 +120,8 @@ export interface SessionFeedbackResponse {
   max_attempts: number
   message: string | null
   added_to_knowledge_base: boolean
+  /** 'provisional' for a fix added from an end user's "yes" alone (a technician verifies it later). */
+  knowledge_base_verification?: FixVerification | null
   /** A new, different solution (same shape as /diagnose); null when resolved or escalated. */
   next_attempt: DiagnoseResponse | null
 }
@@ -181,6 +192,9 @@ export interface HistoryItem {
   reviewed_at: string | null
   /** The knowledge-base record built from this ticket, once reviewed. */
   kb_record_id: string | null
+  /** Whether that record is verified or only provisional (confirmed once). Null until it has one. */
+  kb_verification?: FixVerification | null
+  confirmation_count?: number | null
   /** The iterative session behind a text ticket; null for photos and tickets from before sessions. */
   session?: SessionOut | null
 }
@@ -213,6 +227,9 @@ export interface FeedbackResponse {
   /** Whether this request wrote to the knowledge base. */
   knowledge_base_updated?: boolean
   kb_record_id?: string | null
+  /** For a thumbs up: 'provisional' (one end-user click) or 'verified'. Absent on an older backend. */
+  verification?: FixVerification | null
+  confirmation_count?: number | null
 }
 
 // --- Review workflow + knowledge-base statistics ---------------------------------------------
@@ -224,6 +241,8 @@ export interface KnowledgeBaseStats {
   verified_corrected: number
   /** 'failed_fix' records. Absent on a backend that predates thumbs-down learning. */
   failed?: number
+  /** Confirmed fixes still provisional (confirmed once). `verified` counts only verified ones. Absent on an older backend. */
+  provisional?: number
 }
 
 export interface CorrectionInput {
@@ -241,6 +260,9 @@ export interface ReviewResponse {
   corrected_fix: string | null
   added_to_knowledge_base: boolean
   kb_record_id: string | null
+  /** 'verified' or 'provisional' for that record. Absent on an older backend (= verified). */
+  verification?: FixVerification | null
+  confirmation_count?: number | null
   knowledge_base: KnowledgeBaseStats
 }
 
@@ -261,8 +283,9 @@ export interface StatsResponse {
   knowledge_base_size: number | null
   original_seed_count: number | null
   technician_verified_count: number | null
-  /** Records of fixes that WORKED / did NOT work (absent on an older backend). */
+  /** Records of fixes VERIFIED / still PROVISIONAL (confirmed once) / reported NOT to work (absent on an older backend). */
   verified_fix_count?: number | null
+  provisional_fix_count?: number | null
   failed_fix_count?: number | null
   review: { pending: number; confirmed: number; corrected: number }
   /** 0-1 scale; null when there is nothing to average. */

@@ -12,17 +12,23 @@ class KnowledgeBaseStats(BaseModel):
 
     total: int = Field(description="All records the retrieval step can find.")
     seed: int = Field(description="Records that shipped with the system (data/knowledge_base.json).")
-    verified: int = Field(description="Records added from technician-reviewed tickets.")
+    verified: int = Field(description="Confirmed fixes that are verified (a technician's review, or enough confirmations).")
     verified_confirmed: int = Field(description="Verified records where the technician confirmed the AI's diagnosis.")
     verified_corrected: int = Field(description="Verified records built from the technician's own correction.")
     failed: int = Field(
         default=0,
         description="'failed_fix' records: a diagnosis + fix a user reported did NOT work (from a thumbs-down).",
     )
+    provisional: int = Field(
+        default=0,
+        description="Confirmed fixes that are still PROVISIONAL: confirmed once (an end user's click) but not yet verified.",
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
-            "examples": [{"total": 32, "seed": 28, "verified": 3, "verified_confirmed": 2, "verified_corrected": 1, "failed": 1}]
+            "examples": [
+                {"total": 33, "seed": 28, "verified": 3, "verified_confirmed": 2, "verified_corrected": 1, "failed": 1, "provisional": 1}
+            ]
         }
     )
 
@@ -76,4 +82,9 @@ class ReviewResponse(BaseModel):
     corrected_fix: str | None
     added_to_knowledge_base: bool = Field(description="True once a record built from this ticket is in the knowledge base.")
     kb_record_id: str | None = Field(description="Id of that record (e.g. 'VC-12-a3f9c1'); retrievable in similar_cases.")
+    verification: str | None = Field(
+        default=None,
+        description="'verified' or 'provisional': whether that record has enough confirmations to count as verified.",
+    )
+    confirmation_count: int | None = Field(default=None, description="Total confirmation weight behind the record.")
     knowledge_base: KnowledgeBaseStats

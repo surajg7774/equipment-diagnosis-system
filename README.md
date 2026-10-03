@@ -249,16 +249,51 @@ diagnosis, which is never overwritten, so the two can be compared (History → *
 |---|---|---|
 | POST | `/api/v1/tickets/{id}/confirm` | Confirm the AI was right; adds the AI's diagnosis to the knowledge base. Body optional: `{equipment_type}` |
 | POST | `/api/v1/tickets/{id}/correct` | `{root_cause, recommended_fix, equipment_type?}`; adds the *corrected* case |
-| POST | `/api/v1/feedback` | `{ticket_id, was_correct}`: thumbs up adds a `verified_fix` record, thumbs down adds a `failed_fix` record (see [above](#thumbs-up-and-thumbs-down-teach-it-too)) |
-| GET | `/api/v1/knowledge-base/stats` | `{total, seed, verified, verified_confirmed, verified_corrected, failed}`: makes the growth visible |
+| POST | `/api/v1/feedback` | `{ticket_id, was_correct}`: thumbs up adds a `provisional_fix` record (verified once a technician reviews it), thumbs down adds a `failed_fix` record (see [above](#thumbs-up-and-thumbs-down-teach-it-too)) |
+| GET | `/api/v1/knowledge-base/stats` | `{total, seed, verified, verified_confirmed, verified_corrected, failed, provisional}`: makes the growth visible |
 | GET | `/api/v1/history?review_status=pending` | Filter by status (`pending` lists high priority first). The History page shows the counts and filters |
 
 **What a verified record looks like.** It is matched on the technician's *report text* (as seed records
 are), carries the answer (confirmed: the AI's; corrected: the technician's), and is marked
 `source: "verified"` in its metadata (seed records are `seed`). Retrieved cases expose this as
-`similar_cases[].source` (with `outcome: "verified_fix"`), and the UI shows a "Confirmed working fix"
-chip. The record id is `VC-<ticket>-<hex>`. Photo tickets are matched by the AI's visual description (a
-file name is not a symptom report).
+`similar_cases[].source` (with `outcome: "verified_fix"`, or `"provisional_fix"` if it is not verified yet,
+see below), and the UI shows a "Verified fix" or "Provisional · confirmed once" chip. The record id is
+`VC-<ticket>-<hex>`. Photo tickets are matched by the AI's visual description (a file name is not a
+symptom report).
+
+### Verified vs provisional: one click does not verify a fix
+
+A single click must not be able to teach the knowledge base something it then trusts. Every confirmation says
+**who** confirmed (`user` or `technician`), each source has a weight, and a fix needs `MIN_CONFIRMATIONS_TO_VERIFY`
+(default **2**) to count as *verified*. Below that it is stored as *provisional*:
+
+| Confirmation | Weight | Result at the default threshold of 2 |
+|---|---|---|
+| an end user's thumbs up, or "Yes, it's fixed" in a session | 1 | **provisional** (`outcome: provisional_fix`, `confirmation_count: 1`) |
+| a technician's Confirm or Correct on the History page | 2 | **verified** (`verified_fix`): the expert check the system always relied on |
+| a user's click, then a technician's review of the same ticket | 3 | **verified**, and the SAME record is upgraded (no duplicate) |
+
+* **Provisional is still used, just not trusted equally.** Retrieval still finds a provisional fix (so the learning
+  loop and the demo work), but the prompt marks it `[PROVISIONAL: confirmed only once so far, not yet verified]`
+  and tells the LLM to give it less weight, the UI chips it "Provisional · confirmed once", and ranking treats it as
+  0.05 *less* similar than it is, so a verified (or seed) fix that is almost as close comes first. The shown
+  similarity, `retrieval_confidence` and the close-match test still use the real similarity.
+* **A technician verifies what a user confirmed.** The History row shows a **Provisional** chip and a **Verify**
+  button (the same `POST /tickets/{id}/confirm`). A correction replaces the fix's content, so earlier confirmations
+  of the old text stop counting.
+* **Each source counts once.** The system has no user identity, so a person who uses both the thumbs and the session
+  "Yes" is still one end user and cannot verify their own fix; two *different* end users confirming the same fix on
+  two different tickets are **not** pooled either, because there is no reliable way to tell that two tickets' fixes
+  are the same fix (measured: embedding similarity cannot separate a reworded fix from a different one). The one
+  independent pair the system can actually tell apart is an end user and a technician.
+* **Counts everywhere.** `/stats` has `verified_fix_count`, `provisional_fix_count` and `failed_fix_count`, the
+  knowledge-base stats and the History bar split verified from provisional, and `similar_cases[]` carries
+  `verification` and `confirmation_count`. Every field the old responses had is still there; the new ones are only added.
+* **Kill switch: `MIN_CONFIRMATIONS_TO_VERIFY=1`** makes any confirmation verify at once, which is the behaviour before
+  this safeguard. I checked that by running the ORIGINAL pre-change test suite against the new code with it set:
+  512 of 514 pass, and the 2 that do not only pin exact key sets (the exact stats dictionary and the exact list of
+  columns the migration adds). `3` demands both a user and a technician. Records written before the safeguard keep their
+  verified status.
 
 ### Thumbs up and thumbs down teach it too
 
@@ -268,7 +303,7 @@ wrote a record. Now:
 
 | Verdict | What it writes | Record |
 |---|---|---|
-| 👍 thumbs up | the AI's diagnosis as a confirmed working fix, through the same confirm logic a technician uses (the ticket becomes `confirmed`) | `source: verified`, `outcome: verified_fix`, id `VC-…` |
+| 👍 thumbs up | the AI's diagnosis as a confirmed fix, through the same confirm logic a technician uses (the ticket becomes `confirmed`). One end-user click is one confirmation, so it starts **provisional** until a technician verifies it ([below](#verified-vs-provisional-one-click-does-not-verify-a-fix)) | `source: verified`, `outcome: provisional_fix` (`verified_fix` once verified), id `VC-…` |
 | 👎 thumbs down | a **new, additional** record of the issue plus the diagnosis and fix that did **NOT** work | `source: feedback`, `outcome: failed_fix`, id `FC-…` |
 
 A thumbs-down is an extra signal, not a correction mechanism: it **deletes nothing**, does not mark the
@@ -345,9 +380,11 @@ technician's root cause and fix. An unconfirmed ticket was never retrieved.
   `schema_column_added`); no need to delete `servicediagnose.db`.
 
 **Limitations (read before relying on it)**
-* **No safeguard against a wrong confirmation.** One click makes a case "verified" and it immediately
-  influences retrieval *and* the answers the LLM writes. A technician confirming a bad diagnosis (or
-  typing a wrong correction) pollutes the knowledge base, and there is no undo or removal yet.
+* **Only a partial safeguard against a wrong confirmation.** An end user's click can no longer make a fix
+  *verified* (it stays provisional, labelled and ranked lower, until a technician verifies it), but a provisional
+  fix is still retrieved and still influences the LLM's answers, a technician's single review verifies at once with
+  no second check, a technician typing a wrong correction still pollutes the knowledge base, and there is no undo or
+  removal yet.
 * **No identity or roles:** anyone who can open the History page can confirm or correct, and the
   reviewer is not recorded. The same goes for thumbs up/down: `/feedback` has no authentication and no rate
   limit of its own, and ticket ids are small integers, so anyone can give a verdict on any ticket. The damage
@@ -363,10 +400,11 @@ technician's root cause and fix. An unconfirmed ticket was never retrieved.
   so verified cases do not survive there. The restore step only helps when the database persists
   (e.g. hosted PostgreSQL).
 
-**Planned improvements:** require **two independent confirmations** (or agreement between a
-confirmation and the AI) before a case is trusted, and weight or flag single-reviewer cases;
-record the reviewer and add roles; let an admin retract a verified case; merge near-duplicates;
-keep an audit trail of changes.
+**Planned improvements:** pool confirmations from different end users across tickets (needs user identity and a
+reliable way to recognise "the same fix"), and require a second technician for high-severity fixes; record the
+reviewer and add roles; let an admin retract a verified or provisional case; merge near-duplicates; keep an audit
+trail of changes. (The first idea, requiring a second independent confirmation before a fix is trusted, now exists
+as the verified-vs-provisional rule above.)
 
 ## Image analysis
 
@@ -506,8 +544,8 @@ The web app turns that into "Too many requests, please wait a moment (about 42 s
 { "total_diagnoses_performed": 12, "text_diagnoses": 10, "image_diagnoses": 2,
   "resolution": { "counted": 10, "similar_cases": 6, "general_reasoning": 4,
                   "similar_cases_pct": 60.0, "general_reasoning_pct": 40.0 },
-  "knowledge_base_size": 32, "original_seed_count": 28, "technician_verified_count": 3,
-  "verified_fix_count": 3, "failed_fix_count": 1,
+  "knowledge_base_size": 33, "original_seed_count": 28, "technician_verified_count": 3,
+  "verified_fix_count": 3, "provisional_fix_count": 1, "failed_fix_count": 1,
   "review": { "pending": 8, "confirmed": 2, "corrected": 2 },
   "average_confidence": { "retrieval": 0.512, "llm": 0.81, "image": 0.9 } }
 ```
@@ -518,11 +556,12 @@ The web app turns that into "Too many requests, please wait a moment (about 42 s
   handed to the LLM as examples, `general_reasoning` means nothing matched and the LLM used general
   knowledge. Tickets saved before this was recorded have no basis and are left out of `counted` rather
   than guessed. A percentage is `null` (not 0) when nothing has been counted.
-* **`knowledge_base_size`** is every record retrieval can find: `original_seed_count` plus the verified and
-  failed records. **`verified_fix_count`** counts fixes confirmed to work (thumbs up, a technician's confirm or
-  correction, a resolved session; it equals `technician_verified_count`) and **`failed_fix_count`** counts
-  fixes reported *not* to work (thumbs down). These fields are `null` if the vector store cannot be read; the
-  usage numbers are still returned.
+* **`knowledge_base_size`** is every record retrieval can find: `original_seed_count` plus the verified,
+  provisional and failed records. **`verified_fix_count`** counts fixes that are *verified* (a technician's
+  Confirm or Correct, or enough confirmations; it equals `technician_verified_count`), **`provisional_fix_count`**
+  counts fixes confirmed only once (an end user's thumbs up or "Yes", not yet verified by a technician) and
+  **`failed_fix_count`** counts fixes reported *not* to work (thumbs down). These fields are `null` if the vector
+  store cannot be read; the usage numbers are still returned. Records written before the safeguard count as verified.
 * **Averages** (0-1) are over rows that have a value: the retrieval average is over text tickets, the
   LLM average skips diagnoses where the model gave no usable number (it is not counted as 0), and photo
   confidence is its own average because it is a different kind of number.
@@ -538,7 +577,7 @@ The web app turns that into "Too many requests, please wait a moment (about 42 s
 | POST | `/api/v1/sessions/{id}/feedback` | `{was_helpful, attempt_number?}`: yes resolves the session, no returns a different solution, the cap returns an escalation (see [Iterative diagnosis](#iterative-diagnosis-try-a-solution-give-feedback-get-the-next-one)) |
 | POST | `/api/v1/diagnose-image` | AI visual assessment of an equipment photo by a vision-language model (see [Image analysis](#image-analysis)) |
 | GET | `/api/v1/history` | Paginated past tickets, newest first (`page`, `page_size`) |
-| POST | `/api/v1/feedback` | `{ticket_id, was_correct}`: thumbs up records a confirmed working fix (`verified_fix`), thumbs down records a fix that did not work (`failed_fix`) in the knowledge base |
+| POST | `/api/v1/feedback` | `{ticket_id, was_correct}`: thumbs up records a confirmed fix as `provisional_fix` (verified once a technician reviews it), thumbs down records a fix that did not work (`failed_fix`) in the knowledge base |
 | POST | `/api/v1/tickets/{id}/confirm`, `/correct` | Technician review: adds the case to the knowledge base (see [Feedback loop](#feedback-loop-technicians-improve-the-knowledge-base)) |
 | GET | `/api/v1/knowledge-base/stats` | Seed vs verified (working) vs failed record counts |
 | GET | `/api/v1/stats` | Usage and knowledge-base growth: totals, similar-case vs general-reasoning split, average confidences (see [Statistics](#statistics)) |
@@ -577,6 +616,7 @@ All settings are environment variables (or `.env`); see [.env.example](.env.exam
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Length of that window |
 | `RATE_LIMIT_PROXY_HOPS` | `0` | Trusted proxies in front of the app (0 = use the connection address; `render.yaml` sets 1) |
 | `MAX_SOLUTION_ATTEMPTS` | `4` | Different solutions offered per problem before the user is told to escalate to a human |
+| `MIN_CONFIRMATIONS_TO_VERIFY` | `2` | Confirmations a fix needs to count as *verified* (a user's click = 1, a technician's review = 2). `1` = any confirmation verifies at once (the behaviour before the safeguard: the kill switch); `3` = needs a user AND a technician |
 | `AUTO_SEED_ON_STARTUP` | `true` | Rebuild the knowledge base at boot if it is empty (ephemeral hosts) |
 | `EMBEDDING_BACKEND` | `onnx` | `onnx` (about 210 MB RAM) or `sentence-transformers` (PyTorch, about 750 MB; extra install) |
 | `LOW_CONFIDENCE_THRESHOLD` | `0.50` | Minimum similarity for a "close match" |
@@ -603,8 +643,10 @@ parsing, every failure mode, never logging the image), the photo endpoint with a
 responses), start-up auto-seeding on an empty disk, the RAG routing logic with a faked LLM, seeding
 idempotency, diagnosis sessions (creation, yes/no paths, the attempt cap, conflicts, and that failed
 attempts really reach the HTTP request sent to the model), thumbs up/down teaching the knowledge base
-(verified and failed records, the labelled prompt sections, and that a later similar request is steered away
-from a failed fix), the rate limiter (a fake clock moves time, so no test sleeps) and the statistics
+(verified, provisional and failed records, the labelled prompt sections, and that a later similar request is steered
+away from a failed fix), the confirmation safeguard (the weight table, each way of confirming, upgrading the same
+record, retrieval ranking, prompt labels, legacy records, the kill switch and that every old response field is still
+there), the rate limiter (a fake clock moves time, so no test sleeps) and the statistics
 arithmetic and endpoint, and the API through FastAPI's `TestClient`. The integration tests
 check real retrieval and that the similarity threshold still separates known from unknown issues.
 
@@ -626,11 +668,12 @@ check real retrieval and that the similarity threshold still separates known fro
   give a verdict on any ticket. The damage is bounded (one verdict and at most one record of each kind per
   ticket, and tickets only come from the rate-limited diagnose endpoints), but one anonymous thumbs-down
   does steer later similar diagnoses.
-* **A wrong "yes" teaches the knowledge base.** A thumbs-up (or a technician's Confirm) writes a
-  `verified_fix` record at once, with no confidence check on a thumbs-up; a session "Yes" only needs the
-  solution to be grounded in similar cases or the model to have been at least 60% sure. That record then
-  influences retrieval and the LLM's later answers, and there is no second confirmation, no recorded reviewer
-  and no way to retract it yet. See [Feedback loop](#feedback-loop-technicians-improve-the-knowledge-base).
+* **A wrong "yes" still teaches the knowledge base, but only provisionally.** A thumbs-up (with no confidence
+  check) or a session "Yes" (which needs the solution to be grounded in similar cases or the model to have been at
+  least 60% sure) now records a *provisional* fix: labelled, ranked lower and told to the LLM as unverified, but
+  still retrieved and still able to influence later answers. It becomes verified when a technician reviews it, and a
+  technician's single review verifies at once (no second check). There is no recorded reviewer and no way to retract a
+  record yet. See [Verified vs provisional](#verified-vs-provisional-one-click-does-not-verify-a-fix).
 
 **Other design notes**
 

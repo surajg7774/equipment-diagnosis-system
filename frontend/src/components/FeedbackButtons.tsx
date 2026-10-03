@@ -14,8 +14,11 @@ interface Props {
 
 /** What the knowledge base did with the verdict, in words the user can check against the History/Stats pages. */
 function describeEffect(response: FeedbackResponse): string {
+  if (response.knowledge_base_outcome === 'provisional_fix') {
+    return 'Thanks. Saved as a provisional fix (confirmed once). It counts as verified once a technician reviews it.'
+  }
   if (response.knowledge_base_outcome === 'verified_fix') {
-    return 'Thanks. This diagnosis is now in the knowledge base as a confirmed working fix.'
+    return 'Thanks. This diagnosis is in the knowledge base as a verified fix.'
   }
   if (response.knowledge_base_outcome === 'failed_fix') {
     return 'Thanks. Recorded as an approach that did not work, so similar future problems will avoid it.'
