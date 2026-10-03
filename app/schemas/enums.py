@@ -26,6 +26,24 @@ class ReviewPriority(str, Enum):
     LOW = "low"
 
 
+class SessionStatus(str, Enum):
+    """Where an iterative diagnosis session is."""
+
+    IN_PROGRESS = "in_progress"  # solutions are still being tried
+    RESOLVED = "resolved"  # the user said a solution worked
+    ABANDONED = "abandoned"  # every allowed attempt failed: the user is told to escalate to a human
+
+
+class KnowledgeOutcome(str, Enum):
+    """Whether a knowledge-base record built from user feedback describes a fix that worked.
+
+    Seed records carry no outcome: they are curated resolved cases and count as working fixes.
+    """
+
+    VERIFIED_FIX = "verified_fix"  # thumbs up / technician confirmed or corrected: this fix worked
+    FAILED_FIX = "failed_fix"  # thumbs down: this diagnosis + fix was suggested and did NOT work
+
+
 class DiagnosisBasis(str, Enum):
     """What the LLM's diagnosis was grounded on."""
 

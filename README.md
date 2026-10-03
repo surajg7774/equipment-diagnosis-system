@@ -20,12 +20,13 @@ See [Deployment](#deployment-render--vercel) for hosting on Render + Vercel.
  technician's text
         |
         v
- 1 RETRIEVE   embed text -> ChromaDB top-3 most similar past cases (+ similarity score)
-        |
+ 1 RETRIEVE   embed text -> ChromaDB top-3 most similar past cases with WORKING fixes (+ similarity
+        |      score), and separately any close past cases whose fix a user said did NOT work
         v
- 2 DECIDE     best similarity >= threshold (default 0.50)?
+ 2 DECIDE     best working-fix similarity >= threshold (default 0.50)?
         |        yes -> give the 3 cases to the LLM as reference examples
         |        no  -> give the LLM nothing; it diagnoses from general knowledge
+        |      close failed fixes are always given, in their own section labelled "did NOT work"
         v
  3 GENERATE   the LLM (Ollama or Groq) writes a NEW root cause + fix + severity for THIS issue
         |
@@ -36,8 +37,68 @@ See [Deployment](#deployment-render--vercel) for hosting on Render + Vercel.
             similar_cases ......................... what retrieval found (always shown)
             severity .............................. more severe of keyword heuristic and LLM
             diagnosis_basis / note ................ says whether it was grounded in a past case
-            is_valid_issue ........................ false if the input is not an equipment problem
+            is_valid_issue ........................ false if the input is not a device/equipment problem
+            session_id, attempt_number ............ the diagnosis session this solution belongs to
 ```
+
+**Any physical device is in scope, not just the knowledge base's categories.** The knowledge base is
+seeded with six equipment families (pump, motor, printer, HVAC, conveyor belt, generator), but those
+are only *reference examples*: the LLM diagnoses anything else (a phone, a fridge, a car, a toothbrush)
+from general knowledge, and the response says so (`diagnosis_basis: general_reasoning`). The validity
+check asks only "is this a fault of a physical device or machine of any kind?"; trivia, chit-chat,
+requests for opinions and nonsense are still rejected and not stored. (Verified live: a phone, a car and
+an electric toothbrush were diagnosed; "capital of France", a World Cup question and a poem request
+were rejected.) The LLM makes this judgement, so an odd borderline input can go either way.
+
+## Iterative diagnosis: try a solution, give feedback, get the next one
+
+A diagnosis is no longer a single shot. Every valid `POST /api/v1/diagnose` starts a **diagnosis
+session** and returns its `session_id` with attempt 1. The user then says whether it worked:
+
+```
+POST /api/v1/diagnose                       -> session (in_progress) + attempt 1, ticket created as before
+POST /api/v1/sessions/{id}/feedback {was_helpful: false}  -> a NEW, DIFFERENT attempt 2, 3, 4 ...
+POST /api/v1/sessions/{id}/feedback {was_helpful: true}   -> session resolved
+after the 4th "no"                           -> session abandoned: "escalate to a human technician"
+```
+
+* **"No" produces a different solution on purpose.** The original description plus *every earlier failed
+  attempt* go into the prompt: "The following solutions were already tried and did NOT work ... Suggest a
+  DIFFERENT possible cause and a DIFFERENT fix, not a rework of the same one." This is tested by reading
+  the actual HTTP body sent to the model, not just the function arguments. Retrieved cases are still
+  supplied, with an instruction to ignore any that match a failed attempt.
+* **A repeat backstop.** If a new answer is a near-copy of a failed one (embedding similarity >= 0.90) the
+  model is asked once more with its own repeat listed as ruled out; if it still repeats, the attempt is
+  returned with a note saying so. *Honest limits:* embeddings cannot reliably tell a reworded cause from
+  a different cause on the same equipment (measured: different causes scored up to 0.82, paraphrases of one
+  cause as low as 0.74), so this only catches near-verbatim repeats. What makes attempts differ is the prompt:
+  in live runs the phone got three different causes (battery/power, firmware, liquid damage) and the printer
+  four (toner, controller, transfer roller, high-voltage supply).
+* **The cap** is `MAX_SOLUTION_ATTEMPTS` (default 4). After a "no" to the last attempt the response has
+  `escalate: true`, the session is `abandoned`, and no further LLM call is made. It is a normal 200
+  outcome, not an error. Only a "no" that triggers a new LLM call counts against the rate limit; "yes" and the
+  final escalation are free.
+* **"Yes" resolves the session** and, if the solution was *reasonably trusted*, feeds the existing
+  human-in-the-loop knowledge-base logic: trusted means grounded in similar cases, or the model's own
+  confidence was >= 0.6. A first-attempt "yes" is recorded as a **confirmation** of the ticket; a "yes" on a
+  later attempt is recorded as a **correction** carrying that attempt's text (the ticket itself still shows
+  attempt 1). A ticket a technician already reviewed is left alone. A vector-store failure after "yes" is
+  logged and reported (`added_to_knowledge_base: false`) but does not undo the resolution.
+* **Safe to retry.** A "no" is saved only together with the new attempt it produces, so an LLM failure (503)
+  changes nothing. `attempt_number` in the request makes a stale tab or double click fail with `409`
+  instead of skipping a solution, and the database refuses two attempts with the same number.
+  Repeating the *same* answer on a finished session is harmless; contradicting it is a `409`.
+* **Data model.** `DiagnosisSession` (`session_id`, `original_description`, `equipment_type`, `status`
+  in_progress/resolved/abandoned, `created_at`, `resolved_at`) and `SolutionAttempt` (`attempt_number`,
+  diagnosis, action, severity, `diagnosis_basis`, retrieval and LLM confidence, similar cases, `was_helpful`).
+  The first attempt also creates the usual ticket, so history, review and stats keep working; the new
+  tables are created automatically on an existing database.
+* **Limits.** There is no safeguard against a wrong "yes" teaching the knowledge base (the two-confirmations
+  idea in the feedback-loop section applies here too). Sessions live in the same SQLite file as tickets, so
+  on Render's free tier they vanish on restart; the UI then says the session expired. Photo diagnoses are
+  not iterative. Continuing a session happens through the feedback endpoint, not by passing `session_id` to
+  `/diagnose`. The thumbs up/down (`POST /api/v1/feedback`, see [below](#thumbs-up-and-thumbs-down-teach-it-too))
+  rate the ticket's own diagnosis, which is the first attempt, so the web app shows them on attempt 1 only.
 
 ## Prerequisites
 
@@ -186,15 +247,83 @@ diagnosis, which is never overwritten, so the two can be compared (History → *
 |---|---|---|
 | POST | `/api/v1/tickets/{id}/confirm` | Confirm the AI was right; adds the AI's diagnosis to the knowledge base. Body optional: `{equipment_type}` |
 | POST | `/api/v1/tickets/{id}/correct` | `{root_cause, recommended_fix, equipment_type?}`; adds the *corrected* case |
-| GET | `/api/v1/knowledge-base/stats` | `{total, seed, verified, verified_confirmed, verified_corrected}`: makes the growth visible |
+| POST | `/api/v1/feedback` | `{ticket_id, was_correct}`: thumbs up adds a `verified_fix` record, thumbs down adds a `failed_fix` record (see [above](#thumbs-up-and-thumbs-down-teach-it-too)) |
+| GET | `/api/v1/knowledge-base/stats` | `{total, seed, verified, verified_confirmed, verified_corrected, failed}`: makes the growth visible |
 | GET | `/api/v1/history?review_status=pending` | Filter by status (`pending` lists high priority first). The History page shows the counts and filters |
 
 **What a verified record looks like.** It is matched on the technician's *report text* (as seed records
 are), carries the answer (confirmed: the AI's; corrected: the technician's), and is marked
 `source: "verified"` in its metadata (seed records are `seed`). Retrieved cases expose this as
-`similar_cases[].source`, and the UI shows a "Verified by a technician" chip. The record id is
-`VC-<ticket>-<hex>`. Photo tickets are matched by the AI's visual description (a file name is not a
-symptom report). A quick thumbs up/down is *not* a review and never adds anything.
+`similar_cases[].source` (with `outcome: "verified_fix"`), and the UI shows a "Confirmed working fix"
+chip. The record id is `VC-<ticket>-<hex>`. Photo tickets are matched by the AI's visual description (a
+file name is not a symptom report).
+
+### Thumbs up and thumbs down teach it too
+
+Feedback on a diagnosis now teaches the knowledge base in **both directions**. Before this change
+`POST /api/v1/feedback` only stored a flag (thumbs up *and* down), and only a technician's **Confirm**
+wrote a record. Now:
+
+| Verdict | What it writes | Record |
+|---|---|---|
+| 👍 thumbs up | the AI's diagnosis as a confirmed working fix, through the same confirm logic a technician uses (the ticket becomes `confirmed`) | `source: verified`, `outcome: verified_fix`, id `VC-…` |
+| 👎 thumbs down | a **new, additional** record of the issue plus the diagnosis and fix that did **NOT** work | `source: feedback`, `outcome: failed_fix`, id `FC-…` |
+
+A thumbs-down is an extra signal, not a correction mechanism: it **deletes nothing**, does not mark the
+ticket reviewed (a technician can still confirm or correct it, which adds a verified record *next to* the
+failed one), and blocks nothing. It stores the AI's *original* diagnosis and fix even if a technician later
+corrects the ticket. Seed records have no `outcome` and count as working fixes.
+
+**How retrieval uses both.** A diagnosis embeds the report once and runs two searches over the same
+collection: the top 3 **working** fixes (seed + verified; this is what `similar_cases`,
+`retrieval_confidence` and `diagnosis_basis` are about, unchanged) and, separately, the top 3 **failed**
+fixes, of which only those at least as similar as a "close match" (default 0.50) are kept, so a failure for an
+unrelated problem never steers anything. The prompt then has two clearly labelled groups, and the failed
+ones are also returned to the client as `similar_failed_cases`:
+
+```
+Similar past cases with CONFIRMED WORKING fixes, most similar first:
+  Case 1 - pump ... Problem / Root cause / Fix
+Similar past cases where THIS approach did NOT resolve the issue (this diagnosis and fix were suggested
+before and the user reported that they did not work):
+  Failed case 1 - ... Problem / Diagnosis that did NOT work / Fix that did NOT work
+Do not repeat these diagnoses or fixes, or minor variations of them, for the new issue. Prefer a confirmed
+working fix if one fits, otherwise a different likely cause. ...
+```
+
+If the model repeats a known failure almost word for word (embedding similarity >= 0.90, the same backstop
+as the iterative sessions) it is asked once more with its own repeat listed as ruled out, and if it still
+repeats, the answer carries a note saying so.
+
+**Measured with the real model** (Groq `gpt-oss-120b`, one failed pump diagnosis, then three differently worded
+later requests per arm; similarity is between the failed solution and the later answer, high = a repeat):
+
+| | mean similarity to the failed solution | blamed bearings again |
+|---|---|---|
+| without the failed-fix context (old behaviour) | 0.91 | 3 of 3 |
+| with it | 0.76 | 2 of 3 |
+
+So it **reduces** repeats, it does not remove them: the prompt steers the model, which can still return to a
+cause when the symptoms really point at it (here "grinding" keeps pointing at bearings), and the 0.90 backstop
+only catches near-verbatim repeats. Three runs per arm is a small sample.
+
+**Changing your mind.** One verdict per ticket (the latest wins). Down → up deletes that ticket's *own*
+failed record (the thumbs-down created it, and keeping both would contradict itself) and records the
+verified fix. Up → down adds a failed record but **does not delete** the verified one, because that record
+may also be a technician's confirmation; the same diagnosis can then sit in both groups until someone
+removes one (there is no retract tool yet). A thumbs-up on a ticket a technician already *corrected* writes
+nothing: the correction wins.
+
+**If the vector store is down** the verdict is still saved and the response says
+`knowledge_base_updated: false`; the knowledge base is never half-written. Failed records are restored from
+their tickets at startup like verified ones, and a re-seed never touches them.
+
+`POST /api/v1/feedback` response (the last three fields are new):
+
+```json
+{ "id": 7, "ticket_id": 42, "was_correct": false, "created_at": "...",
+  "knowledge_base_outcome": "failed_fix", "knowledge_base_updated": true, "kb_record_id": "FC-42-a3f9c1" }
+```
 
 **Measured on the real system** (Groq + ONNX embeddings): a report about a laptop battery had no
 close match (retrieval 0.27, `general_reasoning`). After a technician confirmed it, a *differently
@@ -218,7 +347,14 @@ technician's root cause and fix. An unconfirmed ticket was never retrieved.
   influences retrieval *and* the answers the LLM writes. A technician confirming a bad diagnosis (or
   typing a wrong correction) pollutes the knowledge base, and there is no undo or removal yet.
 * **No identity or roles:** anyone who can open the History page can confirm or correct, and the
-  reviewer is not recorded.
+  reviewer is not recorded. The same goes for thumbs up/down: `/feedback` has no authentication and no rate
+  limit of its own, and ticket ids are small integers, so anyone can give a verdict on any ticket. The damage
+  is bounded (one verdict and at most one record of each kind per ticket, and tickets only come from the
+  rate-limited diagnose endpoints) but a single anonymous thumbs-down does steer later similar diagnoses.
+* **A thumbs-down does not say *why*.** The whole diagnosis and fix are recorded as "did not work", even if
+  only part of it was wrong, and a person may click it for reasons unrelated to correctness. Because it is
+  only a prompt hint it can never block an answer, but it can make a good diagnosis less likely.
+* **The failed-fix hint is only a hint** (see the measurements above): the model can still repeat a failure.
 * **Near-duplicates accumulate:** confirming five reports of the same fault adds five records.
 * Verified records without an equipment type are matched on the report text alone.
 * **Hosting:** on a free Render instance both the database and the vector store are wiped on restart,
@@ -320,7 +456,8 @@ The web app turns that into "Too many requests, please wait a moment (about 42 s
 { "total_diagnoses_performed": 12, "text_diagnoses": 10, "image_diagnoses": 2,
   "resolution": { "counted": 10, "similar_cases": 6, "general_reasoning": 4,
                   "similar_cases_pct": 60.0, "general_reasoning_pct": 40.0 },
-  "knowledge_base_size": 31, "original_seed_count": 28, "technician_verified_count": 3,
+  "knowledge_base_size": 32, "original_seed_count": 28, "technician_verified_count": 3,
+  "verified_fix_count": 3, "failed_fix_count": 1,
   "review": { "pending": 8, "confirmed": 2, "corrected": 2 },
   "average_confidence": { "retrieval": 0.512, "llm": 0.81, "image": 0.9 } }
 ```
@@ -331,9 +468,11 @@ The web app turns that into "Too many requests, please wait a moment (about 42 s
   handed to the LLM as examples, `general_reasoning` means nothing matched and the LLM used general
   knowledge. Tickets saved before this was recorded have no basis and are left out of `counted` rather
   than guessed. A percentage is `null` (not 0) when nothing has been counted.
-* **`knowledge_base_size`** is every record retrieval can find: `original_seed_count` plus
-  `technician_verified_count`. These three are `null` if the vector store cannot be read; the usage
-  numbers are still returned.
+* **`knowledge_base_size`** is every record retrieval can find: `original_seed_count` plus the verified and
+  failed records. **`verified_fix_count`** counts fixes confirmed to work (thumbs up, a technician's confirm or
+  correction, a resolved session; it equals `technician_verified_count`) and **`failed_fix_count`** counts
+  fixes reported *not* to work (thumbs down). These fields are `null` if the vector store cannot be read; the
+  usage numbers are still returned.
 * **Averages** (0-1) are over rows that have a value: the retrieval average is over text tickets, the
   LLM average skips diagnoses where the model gave no usable number (it is not counted as 0), and photo
   confidence is its own average because it is a different kind of number.
@@ -345,12 +484,13 @@ The web app turns that into "Too many requests, please wait a moment (about 42 s
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/v1/diagnose` | RAG diagnosis from a text description (stored as a ticket) |
+| POST | `/api/v1/diagnose` | RAG diagnosis from a text description (any device). Stored as a ticket and starts a session; optional `equipment_type` |
+| POST | `/api/v1/sessions/{id}/feedback` | `{was_helpful, attempt_number?}`: yes resolves the session, no returns a different solution, the cap returns an escalation (see [Iterative diagnosis](#iterative-diagnosis-try-a-solution-give-feedback-get-the-next-one)) |
 | POST | `/api/v1/diagnose-image` | AI visual assessment of an equipment photo by a vision-language model (see [Image analysis](#image-analysis)) |
 | GET | `/api/v1/history` | Paginated past tickets, newest first (`page`, `page_size`) |
-| POST | `/api/v1/feedback` | `{ticket_id, was_correct}`; a quick thumbs up/down (analytics only; adds nothing to the knowledge base) |
+| POST | `/api/v1/feedback` | `{ticket_id, was_correct}`: thumbs up records a confirmed working fix (`verified_fix`), thumbs down records a fix that did not work (`failed_fix`) in the knowledge base |
 | POST | `/api/v1/tickets/{id}/confirm`, `/correct` | Technician review: adds the case to the knowledge base (see [Feedback loop](#feedback-loop-technicians-improve-the-knowledge-base)) |
-| GET | `/api/v1/knowledge-base/stats` | Seed vs technician-verified record counts |
+| GET | `/api/v1/knowledge-base/stats` | Seed vs verified (working) vs failed record counts |
 | GET | `/api/v1/stats` | Usage and knowledge-base growth: totals, similar-case vs general-reasoning split, average confidences (see [Statistics](#statistics)) |
 | GET | `/health` | Database, vector store and LLM status (503 if any is down) |
 | GET | `/health/live` | Liveness only: always 200 while the process is up (use as the host's health check) |
@@ -383,9 +523,10 @@ All settings are environment variables (or `.env`); see [.env.example](.env.exam
 | `VISION_MAX_TOKENS` / `VISION_TIMEOUT_SECONDS` | `1024` / `60` | Output cap / request limit |
 | `GROQ_VISION_REASONING_EFFORT` | *(empty)* | Optional; not sent when empty |
 | `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated browser origins allowed by CORS. Production: the frontend URL |
-| `RATE_LIMIT_PER_MINUTE` | `10` | Requests per client per window on the two AI endpoints; `0` disables (see Rate limiting) |
+| `RATE_LIMIT_PER_MINUTE` | `10` | Requests per client per window on the AI endpoints (a "no" in a session also counts); `0` disables (see Rate limiting) |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Length of that window |
 | `RATE_LIMIT_PROXY_HOPS` | `0` | Trusted proxies in front of the app (0 = use the connection address; `render.yaml` sets 1) |
+| `MAX_SOLUTION_ATTEMPTS` | `4` | Different solutions offered per problem before the user is told to escalate to a human |
 | `AUTO_SEED_ON_STARTUP` | `true` | Rebuild the knowledge base at boot if it is empty (ephemeral hosts) |
 | `EMBEDDING_BACKEND` | `onnx` | `onnx` (about 210 MB RAM) or `sentence-transformers` (PyTorch, about 750 MB; extra install) |
 | `LOW_CONFIDENCE_THRESHOLD` | `0.50` | Minimum similarity for a "close match" |
@@ -410,7 +551,10 @@ response, prompt building and LLM-output parsing, the Ollama adapter against a f
 key-redaction cases), the vision adapter against a faked HTTP layer (inline base64 image, output
 parsing, every failure mode, never logging the image), the photo endpoint with a fake vision model, settings and secrets handling, CORS (allowed, blocked, preflight, error
 responses), start-up auto-seeding on an empty disk, the RAG routing logic with a faked LLM, seeding
-idempotency, the rate limiter (a fake clock moves time, so no test sleeps) and the statistics
+idempotency, diagnosis sessions (creation, yes/no paths, the attempt cap, conflicts, and that failed
+attempts really reach the HTTP request sent to the model), thumbs up/down teaching the knowledge base
+(verified and failed records, the labelled prompt sections, and that a later similar request is steered away
+from a failed fix), the rate limiter (a fake clock moves time, so no test sleeps) and the statistics
 arithmetic and endpoint, and the API through FastAPI's `TestClient`. The integration tests
 check real retrieval and that the similarity threshold still separates known from unknown issues.
 

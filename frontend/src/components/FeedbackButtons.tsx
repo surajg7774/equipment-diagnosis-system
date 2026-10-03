@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { submitFeedback } from '../api/client'
 import { describeError } from '../lib/errors'
+import type { FeedbackResponse } from '../types/api'
 import { ThumbDownIcon, ThumbUpIcon } from './icons'
 
 interface Props {
@@ -11,11 +12,26 @@ interface Props {
   withLabel?: boolean
 }
 
-/** Thumbs up/down for one ticket. Updates optimistically and rolls back if saving fails. */
+/** What the knowledge base did with the verdict, in words the user can check against the History/Stats pages. */
+function describeEffect(response: FeedbackResponse): string {
+  if (response.knowledge_base_outcome === 'verified_fix') {
+    return 'Thanks. This diagnosis is now in the knowledge base as a confirmed working fix.'
+  }
+  if (response.knowledge_base_outcome === 'failed_fix') {
+    return 'Thanks. Recorded as an approach that did not work, so similar future problems will avoid it.'
+  }
+  return 'Thanks, your feedback was saved.'
+}
+
+/**
+ * Thumbs up/down for one ticket. Updates optimistically and rolls back if saving fails. The backend turns
+ * each verdict into knowledge: up = a confirmed working fix, down = a fix that did NOT work.
+ */
 export function FeedbackButtons({ ticketId, initial, withLabel = false }: Props) {
   const [value, setValue] = useState<boolean | null>(initial)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [effect, setEffect] = useState<string | null>(null)
 
   async function choose(wasCorrect: boolean) {
     if (busy || value === wasCorrect) return
@@ -23,8 +39,9 @@ export function FeedbackButtons({ ticketId, initial, withLabel = false }: Props)
     setValue(wasCorrect) // optimistic
     setBusy(true)
     setError(null)
+    setEffect(null)
     try {
-      await submitFeedback(ticketId, wasCorrect)
+      setEffect(describeEffect(await submitFeedback(ticketId, wasCorrect)))
     } catch (err) {
       setValue(previous)
       setError(describeError(err).message)
@@ -56,14 +73,21 @@ export function FeedbackButtons({ ticketId, initial, withLabel = false }: Props)
   }
 
   return (
-    <div className="inline-flex flex-wrap items-center gap-2">
-      {withLabel && <span className="text-sm text-slate-600">Was this diagnosis correct?</span>}
-      {button(true, 'Mark diagnosis as correct', 'feedback-up')}
-      {button(false, 'Mark diagnosis as incorrect', 'feedback-down')}
-      {error && (
-        <span role="alert" className="text-xs text-red-700">
-          Couldn&apos;t save feedback. {error}
-        </span>
+    <div className="space-y-1">
+      <div className="inline-flex flex-wrap items-center gap-2">
+        {withLabel && <span className="text-sm text-slate-600">Was this diagnosis correct?</span>}
+        {button(true, 'Mark diagnosis as correct', 'feedback-up')}
+        {button(false, 'Mark diagnosis as incorrect', 'feedback-down')}
+        {error && (
+          <span role="alert" className="text-xs text-red-700">
+            Couldn&apos;t save feedback. {error}
+          </span>
+        )}
+      </div>
+      {effect && (
+        <p className="text-xs text-slate-500" role="status" data-testid="feedback-effect">
+          {effect}
+        </p>
       )}
     </div>
   )

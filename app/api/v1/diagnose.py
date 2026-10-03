@@ -9,6 +9,7 @@ from fastapi import Depends
 
 from app.api.deps import (
     DiagnosisServiceDep,
+    SessionServiceDep,
     SettingsDep,
     TicketServiceDep,
     VisionServiceDep,
@@ -16,6 +17,7 @@ from app.api.deps import (
 )
 from app.schemas.common import ErrorResponse
 from app.schemas.diagnosis import DiagnoseRequest, DiagnoseResponse, ImageDiagnoseResponse
+from app.services.session_service import diagnose_response_for
 from app.services.vision_service import MEDIA_TYPES, validate_image_bytes
 
 logger = logging.getLogger(__name__)
@@ -34,10 +36,13 @@ router = APIRouter(tags=["Diagnosis"])
         "diagnoses from general knowledge and `note` says so. (3) The LLM writes a new, tailored "
         "`diagnosis` and `recommended_action`. `similar_cases` shows what was retrieved and "
         "`retrieval_confidence` is the retrieval similarity and `llm_confidence` is the model's own "
-        "certainty in its diagnosis. The call is stored as a ticket "
-        "(see `/history`), unless the LLM judges that the input is not an equipment issue "
-        "(`is_valid_issue: false`), in which case nothing is stored. Expect a few seconds "
-        "per call (up to a couple of minutes if the model has to be loaded first)."
+        "certainty in its diagnosis. Any physical device or machine is accepted, not just the "
+        "categories in the knowledge base. The call is stored as a ticket "
+        "(see `/history`) and starts a **diagnosis session**: the response carries a `session_id`, "
+        "and `POST /api/v1/sessions/{session_id}/feedback` says whether the solution worked "
+        "(if not, a different one is generated). If the LLM judges that the input is not an "
+        "equipment issue (`is_valid_issue: false`) nothing is stored and there is no session. "
+        "Expect a few seconds per call (up to a couple of minutes if the model has to be loaded first)."
     ),
     responses={
         422: {"model": ErrorResponse, "description": "Invalid request body."},
@@ -53,41 +58,26 @@ router = APIRouter(tags=["Diagnosis"])
 def diagnose(
     payload: DiagnoseRequest,
     diagnosis_service: DiagnosisServiceDep,
-    tickets: TicketServiceDep,
+    sessions: SessionServiceDep,
 ) -> DiagnoseResponse:
     # `def` (not `async def`): embedding, vector search and the LLM call are all
     # blocking. FastAPI runs sync handlers in a thread pool, so the event loop stays free.
     result = diagnosis_service.diagnose(payload.description)
 
-    # Input that is not an equipment problem is answered but never stored, so it
-    # cannot pollute the ticket history.
-    ticket_id = None
-    if result.is_valid_issue:
-        ticket_id = tickets.create_ticket(
-            source="text",
-            description=payload.description,
-            severity=result.severity,
-            diagnosis=result.diagnosis,
-            recommended_action=result.recommended_action,
-            confidence_score=result.retrieval_confidence,  # stored value: retrieval similarity
-            similar_cases=result.similar_cases,
-            diagnosis_basis=result.diagnosis_basis.value,
-            # Only the model's real number: a defaulted 0.5 would pollute the average.
-            llm_confidence=None if result.llm_confidence_defaulted else result.llm_confidence,
-        ).id
-    return DiagnoseResponse(
-        is_valid_issue=result.is_valid_issue,
-        ticket_id=ticket_id,
-        severity=result.severity,
-        diagnosis=result.diagnosis,
-        recommended_action=result.recommended_action,
-        retrieval_confidence=result.retrieval_confidence,
-        llm_confidence=result.llm_confidence,
-        llm_confidence_defaulted=result.llm_confidence_defaulted,
-        confidence_score=result.retrieval_confidence,  # deprecated alias
-        similar_cases=result.similar_cases,
-        diagnosis_basis=result.diagnosis_basis,
-        note=result.note,
+    # Input that is not an equipment problem is answered but never stored (no ticket, no session),
+    # so it cannot pollute the history.
+    if not result.is_valid_issue:
+        return diagnose_response_for(result, ticket_id=None, session_id=None, attempt_number=None, max_attempts=None)
+
+    ticket, session, attempt = sessions.start(
+        description=payload.description, equipment_type=payload.equipment_type, result=result
+    )
+    return diagnose_response_for(
+        result,
+        ticket_id=ticket.id,
+        session_id=session.session_id,
+        attempt_number=attempt.attempt_number,
+        max_attempts=sessions.max_attempts,
     )
 
 

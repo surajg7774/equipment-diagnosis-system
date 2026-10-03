@@ -15,12 +15,25 @@ class DiagnoseRequest(BaseModel):
         description="Free-text description of the equipment problem (10-2000 characters).",
     )
 
+    equipment_type: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Optional kind of equipment (e.g. 'pump', 'laptop'). Stored with the session; it does not change the diagnosis.",
+    )
+
     # Strip leading/trailing whitespace *before* the length check, so
     # "          " (10 spaces) is rejected rather than accepted as valid.
     @field_validator("description", mode="before")
     @classmethod
     def _strip_whitespace(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("equipment_type", mode="before")
+    @classmethod
+    def _blank_equipment_type_is_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -93,12 +106,31 @@ class DiagnoseResponse(BaseModel):
     note: str | None = Field(
         default=None, description="Set when the diagnosis is not grounded in a close past case."
     )
+    similar_failed_cases: list[SimilarCase] = Field(
+        default_factory=list,
+        description=(
+            "Close past cases whose diagnosis + fix a user reported did NOT work (thumbs down). They were given "
+            "to the LLM in a separate, labelled section so it avoids repeating them. Empty when there are none."
+        ),
+    )
+    session_id: str | None = Field(
+        default=None,
+        description=(
+            "The diagnosis session this solution belongs to; send it to "
+            "POST /api/v1/sessions/{session_id}/feedback to say whether it worked. Null if is_valid_issue is false."
+        ),
+    )
+    attempt_number: int | None = Field(default=None, description="Which solution attempt this is within the session (1-based).")
+    max_attempts: int | None = Field(default=None, description="How many different solutions the session offers before suggesting escalation.")
 
     model_config = ConfigDict(
         json_schema_extra={
             "examples": [
                 {
                     "is_valid_issue": True,
+                    "session_id": "3f9c1b2a7d5e4c60b1a2c3d4e5f60718",
+                    "attempt_number": 1,
+                    "max_attempts": 4,
                     "ticket_id": 42,
                     "severity": "high",
                     "diagnosis": "The loud grinding together with an oil leak at the shaft points to worn pump bearings and a failed shaft seal, likely from lack of lubrication.",

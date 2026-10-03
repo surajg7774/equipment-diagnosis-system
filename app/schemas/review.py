@@ -15,10 +15,14 @@ class KnowledgeBaseStats(BaseModel):
     verified: int = Field(description="Records added from technician-reviewed tickets.")
     verified_confirmed: int = Field(description="Verified records where the technician confirmed the AI's diagnosis.")
     verified_corrected: int = Field(description="Verified records built from the technician's own correction.")
+    failed: int = Field(
+        default=0,
+        description="'failed_fix' records: a diagnosis + fix a user reported did NOT work (from a thumbs-down).",
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
-            "examples": [{"total": 31, "seed": 28, "verified": 3, "verified_confirmed": 2, "verified_corrected": 1}]
+            "examples": [{"total": 32, "seed": 28, "verified": 3, "verified_confirmed": 2, "verified_corrected": 1, "failed": 1}]
         }
     )
 

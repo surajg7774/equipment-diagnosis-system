@@ -3,7 +3,9 @@ import { DatabaseIcon } from './icons'
 
 /** Makes the knowledge base's growth visible: shipped seed records vs technician-verified ones. */
 export function KnowledgeBaseBar({ stats }: { stats: KnowledgeBaseStats }) {
+  const failed = stats.failed ?? 0 // absent on a backend that predates thumbs-down learning
   const verifiedShare = stats.total === 0 ? 0 : (stats.verified / stats.total) * 100
+  const failedShare = stats.total === 0 ? 0 : (failed / stats.total) * 100
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="kb-stats">
@@ -23,7 +25,7 @@ export function KnowledgeBaseBar({ stats }: { stats: KnowledgeBaseStats }) {
             </dd>
           </div>
           <div className="flex items-baseline gap-1.5">
-            <dt className="text-slate-500">Verified by technicians</dt>
+            <dt className="text-slate-500">Confirmed working fixes</dt>
             <dd className="font-semibold tabular-nums text-accent-700" data-testid="kb-verified">
               {stats.verified}
             </dd>
@@ -31,18 +33,28 @@ export function KnowledgeBaseBar({ stats }: { stats: KnowledgeBaseStats }) {
               ({stats.verified_confirmed} confirmed · {stats.verified_corrected} corrected)
             </dd>
           </div>
+          {failed > 0 && (
+            <div className="flex items-baseline gap-1.5">
+              <dt className="text-slate-500">Fixes that did not work</dt>
+              <dd className="font-semibold tabular-nums text-amber-700" data-testid="kb-failed">
+                {failed}
+              </dd>
+            </div>
+          )}
         </dl>
       </div>
       <div
         className="mt-2.5 flex h-2 overflow-hidden rounded-full bg-slate-200"
         role="img"
-        aria-label={`${stats.seed} seed records and ${stats.verified} verified records`}
+        aria-label={`${stats.seed} seed records, ${stats.verified} confirmed working fixes and ${failed} fixes that did not work`}
       >
-        <div className="h-full bg-slate-400" style={{ width: `${100 - verifiedShare}%` }} />
+        <div className="h-full bg-slate-400" style={{ width: `${100 - verifiedShare - failedShare}%` }} />
         <div className="h-full bg-accent-500 transition-[width] duration-500" style={{ width: `${verifiedShare}%` }} />
+        <div className="h-full bg-amber-400 transition-[width] duration-500" style={{ width: `${failedShare}%` }} />
       </div>
       <p className="mt-1.5 text-xs text-slate-500">
-        Confirming or correcting a diagnosis below adds it here, so similar future reports can find it.
+        Confirming or correcting a diagnosis below (or a thumbs up) adds it here as a working fix; a thumbs down records a
+        fix that did not work, so similar future reports avoid repeating it.
       </p>
     </div>
   )

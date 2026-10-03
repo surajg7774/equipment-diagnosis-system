@@ -6,8 +6,8 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.exceptions import TicketNotFoundError
-from app.models.ticket import Feedback, Ticket
-from app.schemas.enums import ReviewPriority, ReviewStatus, Severity
+from app.models.ticket import DiagnosisSession, Feedback, SolutionAttempt, Ticket
+from app.schemas.enums import ReviewPriority, ReviewStatus, SessionStatus, Severity
 from app.schemas.knowledge_base import SimilarCase
 
 
@@ -70,8 +70,12 @@ class TicketService:
 
         total = self._session.scalar(count_query) or 0
         tickets = self._session.scalars(
-            # Load feedback for the whole page in one extra query (avoids N+1).
-            query.options(selectinload(Ticket.feedback))
+            # Load feedback and sessions (with their attempts) for the whole page in a few extra
+            # queries, instead of one per row (N+1).
+            query.options(
+                selectinload(Ticket.feedback),
+                selectinload(Ticket.diagnosis_session).selectinload(DiagnosisSession.attempts),
+            )
             .order_by(*order)
             .offset((page - 1) * page_size)
             .limit(page_size)
@@ -94,7 +98,20 @@ class TicketService:
                 query = query.where(condition)
             return s.scalar(query)
 
+        # Attempts per RESOLVED session (the winning attempt is the last one, so the count is the number tried).
+        attempts_per_resolved = (
+            select(func.count(SolutionAttempt.id).label("n"))
+            .join(DiagnosisSession, DiagnosisSession.session_id == SolutionAttempt.session_id)
+            .where(DiagnosisSession.status == SessionStatus.RESOLVED)
+            .group_by(SolutionAttempt.session_id)
+            .subquery()
+        )
+
         return {
+            "sessions": {
+                "by_status": grouped(DiagnosisSession.status),
+                "avg_attempts_to_resolve": s.scalar(select(func.avg(attempts_per_resolved.c.n))),
+            },
             "total": s.scalar(select(func.count()).select_from(Ticket)) or 0,
             "by_source": grouped(Ticket.source),
             "by_basis": grouped(Ticket.diagnosis_basis, Ticket.diagnosis_basis.is_not(None)),

@@ -2,10 +2,11 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ApiError, diagnose } from '../api/client'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { ImageUploadCard } from '../components/ImageUploadCard'
-import { InvalidResultCard, ResultCard } from '../components/ResultCard'
+import { InvalidResultCard } from '../components/ResultCard'
 import { ResultSkeleton } from '../components/ResultSkeleton'
+import { SessionFlow } from '../components/SessionFlow'
 import { SpinnerIcon } from '../components/icons'
-import { EQUIPMENT_TYPES, type EquipmentType } from '../lib/equipment'
+import { EQUIPMENT_TYPES } from '../lib/equipment'
 import { useElapsedSeconds } from '../lib/useElapsedSeconds'
 import type { DiagnoseResponse } from '../types/api'
 
@@ -14,21 +15,24 @@ const MIN_LENGTH = 10
 const MAX_LENGTH = 2000
 
 
-// The backend's diagnose endpoint accepts only a description (no equipment_type field), so the
-// dropdown is purely a UI hint: it changes the placeholder to suggest what to describe, and is
-// never sent or merged into the description.
+// The equipment type is sent as its own field (never merged into the description, so the stored
+// report is exactly what was typed). It also picks a placeholder that suggests what to describe.
+const MAX_TYPE_LENGTH = 64
 const DEFAULT_PLACEHOLDER = 'e.g. pump making loud grinding noise and leaking oil'
-const PLACEHOLDERS: Record<EquipmentType, string> = {
+const PLACEHOLDERS: Record<string, string> = {
   pump: 'e.g. loud grinding noise and oil leaking near the shaft seal',
   motor: 'e.g. overheating with a burning smell, breaker keeps tripping',
   printer: 'e.g. paper jams and toner smears, fuser error on the display',
   HVAC: 'e.g. blowing warm air, water dripping from the indoor unit',
   'conveyor belt': 'e.g. belt drifting to one side and slipping on the drive pulley',
   generator: 'e.g. cranks slowly and will not start, black smoke when running',
+  laptop: 'e.g. battery drains in an hour and the fan is loud',
+  'mobile phone': 'e.g. will not turn on even after charging overnight',
 }
 
 const EXAMPLES = [
   'pump making loud grinding noise and leaking oil',
+  'my mobile phone will not turn on even after charging',
   'forklift hydraulics leaking fluid and losing lift power',
   'what is the capital of France',
 ]
@@ -41,7 +45,7 @@ type Status =
 
 export function DiagnosePage() {
   const [text, setText] = useState('')
-  const [equipmentType, setEquipmentType] = useState<EquipmentType | ''>('')
+  const [equipmentType, setEquipmentType] = useState('')
   const [submitted, setSubmitted] = useState(false) // show client validation after the first attempt
   const [status, setStatus] = useState<Status>({ phase: 'idle' })
   const controllerRef = useRef<AbortController | null>(null)
@@ -73,7 +77,7 @@ export function DiagnosePage() {
     lastRequestRef.current = description
     setStatus({ phase: 'loading' })
     try {
-      const data = await diagnose(description, controller.signal)
+      const data = await diagnose(description, controller.signal, equipmentType.trim() || undefined)
       setStatus({ phase: 'success', data })
       // Bring the result into view on small screens where it renders below the form.
       requestAnimationFrame(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }))
@@ -87,8 +91,7 @@ export function DiagnosePage() {
     event.preventDefault()
     setSubmitted(true)
     if (loading || trimmedLength < MIN_LENGTH) return
-    // Sent exactly as typed: the equipment type is a hint only (see PLACEHOLDERS), so stored
-    // tickets contain just the technician's own words.
+    // The description is sent exactly as typed; the equipment type travels separately.
     void run(text.trim())
   }
 
@@ -116,7 +119,7 @@ export function DiagnosePage() {
                 setText(e.target.value)
                 if (status.phase === 'error') setStatus({ phase: 'idle' })
               }}
-              placeholder={equipmentType ? PLACEHOLDERS[equipmentType] : DEFAULT_PLACEHOLDER}
+              placeholder={PLACEHOLDERS[equipmentType.trim()] ?? DEFAULT_PLACEHOLDER}
               aria-invalid={fieldError ? true : undefined}
               aria-describedby="description-help description-error"
               data-testid="description"
@@ -156,23 +159,26 @@ export function DiagnosePage() {
             <label htmlFor="equipment-type" className="block text-sm font-semibold text-navy-900">
               Equipment type <span className="font-normal text-slate-500">(optional)</span>
             </label>
-            <select
+            <input
               id="equipment-type"
+              type="text"
+              list="equipment-type-suggestions"
               value={equipmentType}
+              maxLength={MAX_TYPE_LENGTH}
               disabled={loading}
-              onChange={(e) => setEquipmentType(e.target.value as EquipmentType | '')}
+              onChange={(e) => setEquipmentType(e.target.value)}
+              placeholder="e.g. laptop, pump, washing machine"
+              autoComplete="off"
               data-testid="equipment-type"
-              className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-accent-500 disabled:bg-slate-50"
-            >
-              <option value="">Not specified</option>
+              className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-accent-500 disabled:bg-slate-50"
+            />
+            <datalist id="equipment-type-suggestions">
               {EQUIPMENT_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
+                <option key={type} value={type} />
               ))}
-            </select>
+            </datalist>
             <p className="mt-1 text-xs text-slate-500">
-              Only suggests what to describe; it is not sent with your report.
+              Any kind of device or machine works. Saved with your report; it does not change the diagnosis.
             </p>
           </div>
 
@@ -207,7 +213,12 @@ export function DiagnosePage() {
         {showBanner && status.phase === 'error' && <ErrorBanner error={status.error} onRetry={onRetry} />}
 
         {status.phase === 'success' &&
-          (status.data.is_valid_issue ? <ResultCard data={status.data} /> : <InvalidResultCard data={status.data} />)}
+          (status.data.is_valid_issue ? (
+            // key: a new diagnosis starts a fresh session view instead of reusing the old one's state
+            <SessionFlow key={status.data.session_id ?? status.data.ticket_id ?? 'result'} first={status.data} />
+          ) : (
+            <InvalidResultCard data={status.data} />
+          ))}
       </div>
     </div>
   )

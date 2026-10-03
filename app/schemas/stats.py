@@ -27,6 +27,18 @@ class ReviewCounts(BaseModel):
     corrected: int
 
 
+class SessionCounts(BaseModel):
+    """Iterative diagnosis sessions: how many, and how they ended."""
+
+    total: int
+    in_progress: int
+    resolved: int
+    abandoned: int = Field(description="Closed after every allowed attempt failed (escalated to a human).")
+    average_attempts_to_resolve: float | None = Field(
+        description="Mean number of attempts it took across resolved sessions; null if none resolved yet."
+    )
+
+
 class StatsResponse(BaseModel):
     """A demo-friendly snapshot of usage and of the knowledge base's growth."""
 
@@ -39,8 +51,17 @@ class StatsResponse(BaseModel):
     knowledge_base_size: int | None = Field(description="All records retrieval can find; null if the vector store is unavailable.")
     original_seed_count: int | None = Field(description="Records that shipped with the system.")
     technician_verified_count: int | None = Field(description="Records added from technician-reviewed tickets.")
+    verified_fix_count: int | None = Field(
+        default=None,
+        description="Knowledge-base records of fixes confirmed to WORK (thumbs up, technician confirm/correct, resolved session).",
+    )
+    failed_fix_count: int | None = Field(
+        default=None,
+        description="Knowledge-base records of fixes reported NOT to work (thumbs down); offered to the LLM as 'did NOT work' context.",
+    )
     review: ReviewCounts
     average_confidence: AverageConfidence
+    sessions: SessionCounts
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -53,8 +74,11 @@ class StatsResponse(BaseModel):
                     "knowledge_base_size": 31,
                     "original_seed_count": 28,
                     "technician_verified_count": 3,
+                    "verified_fix_count": 3,
+                    "failed_fix_count": 1,
                     "review": {"pending": 8, "confirmed": 2, "corrected": 2},
                     "average_confidence": {"retrieval": 0.512, "llm": 0.81, "image": 0.9},
+                    "sessions": {"total": 10, "in_progress": 2, "resolved": 7, "abandoned": 1, "average_attempts_to_resolve": 1.6},
                 }
             ]
         }

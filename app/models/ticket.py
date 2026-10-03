@@ -1,12 +1,18 @@
-"""ORM models: a diagnosis ticket and the technician feedback on it."""
+"""ORM models: a diagnosis ticket, the technician feedback on it, and the iterative diagnosis session.
 
+A text diagnosis creates a Ticket (what history, review and stats are built on) AND a
+DiagnosisSession that holds the "try a solution, give feedback, get the next one" loop. The first
+attempt's content is also on the ticket; later attempts live only in SolutionAttempt rows.
+"""
+
+import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Enum, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, UTCDateTime
-from app.schemas.enums import ReviewPriority, ReviewStatus, Severity
+from app.schemas.enums import ReviewPriority, ReviewStatus, SessionStatus, Severity
 
 
 def _utcnow() -> datetime:
@@ -62,9 +68,17 @@ class Ticket(Base):
     # gave), so it can be updated if the review changes and rebuilt if the vector store is wiped.
     kb_record_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     review_equipment_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The "failed_fix" record created by a thumbs-down on this ticket (the AI's diagnosis did not work).
+    # Separate from kb_record_id: a ticket can later ALSO get a verified record (e.g. a technician's correction).
+    failed_kb_record_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     feedback: Mapped["Feedback | None"] = relationship(
         back_populates="ticket", uselist=False, cascade="all, delete-orphan"
+    )
+    # The iterative session started by this diagnosis (None for photo tickets and for tickets that
+    # predate sessions).
+    diagnosis_session: Mapped["DiagnosisSession | None"] = relationship(
+        back_populates="ticket", uselist=False
     )
 
     @property
@@ -85,3 +99,68 @@ class Feedback(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_utcnow)
 
     ticket: Mapped[Ticket] = relationship(back_populates="feedback")
+
+
+def _new_session_id() -> str:
+    # Random and unguessable: anyone holding a session id may give feedback on it.
+    return uuid.uuid4().hex
+
+
+class DiagnosisSession(Base):
+    """One problem being worked on: the original report plus the solutions tried so far."""
+
+    __tablename__ = "diagnosis_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_session_id)
+    ticket_id: Mapped[int | None] = mapped_column(ForeignKey("tickets.id"), unique=True, nullable=True, index=True)
+    original_description: Mapped[str] = mapped_column(Text)
+    equipment_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[SessionStatus] = mapped_column(
+        Enum(SessionStatus, native_enum=False, length=16, values_callable=lambda e: [m.value for m in e]),
+        default=SessionStatus.IN_PROGRESS,
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_utcnow, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    ticket: Mapped[Ticket | None] = relationship(back_populates="diagnosis_session")
+    attempts: Mapped[list["SolutionAttempt"]] = relationship(
+        back_populates="session", order_by="SolutionAttempt.attempt_number", cascade="all, delete-orphan"
+    )
+
+    @property
+    def latest_attempt(self) -> "SolutionAttempt | None":
+        return self.attempts[-1] if self.attempts else None
+
+    @property
+    def attempt_count(self) -> int:
+        return len(self.attempts)
+
+    @property
+    def attempts_to_resolve(self) -> int | None:
+        """How many attempts it took, once resolved (the winning attempt is the last one)."""
+        return len(self.attempts) if self.status == SessionStatus.RESOLVED else None
+
+
+class SolutionAttempt(Base):
+    """One proposed diagnosis + fix within a session, and whether the user said it worked."""
+
+    __tablename__ = "solution_attempts"
+    # The database itself refuses two attempts with the same number (e.g. a double-clicked "No").
+    __table_args__ = (UniqueConstraint("session_id", "attempt_number", name="uq_attempt_number_per_session"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("diagnosis_sessions.session_id"), index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer)  # 1-based
+    diagnosis: Mapped[str] = mapped_column(Text)
+    recommended_action: Mapped[str] = mapped_column(Text)
+    severity: Mapped[Severity] = mapped_column(Enum(Severity, native_enum=False, length=16))
+    diagnosis_basis: Mapped[str] = mapped_column(String(24))  # "similar_cases" / "general_reasoning"
+    retrieval_confidence: Mapped[float] = mapped_column(Float)
+    llm_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)  # null: the model gave no usable number
+    similar_cases: Mapped[list] = mapped_column(JSON, default=list)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # null = no answer yet, true = this solved it, false = it did not
+    was_helpful: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_utcnow)
+
+    session: Mapped[DiagnosisSession] = relationship(back_populates="attempts")

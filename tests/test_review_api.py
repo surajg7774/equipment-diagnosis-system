@@ -191,12 +191,13 @@ def test_an_unconfirmed_ticket_is_not_retrieved_later(client):
     assert client.get("/api/v1/knowledge-base/stats").json()["verified"] == 0
 
 
-def test_a_thumbs_up_alone_does_not_add_to_the_knowledge_base(client):
+def test_a_thumbs_up_now_adds_the_diagnosis_to_the_knowledge_base(client):
+    # Changed on purpose: feedback now teaches the knowledge base in both directions (see test_feedback_kb.py).
     ticket_id = _diagnose(client)["ticket_id"]
 
     client.post("/api/v1/feedback", json={"ticket_id": ticket_id, "was_correct": True})
 
-    assert client.get("/api/v1/knowledge-base/stats").json()["verified"] == 0
+    assert client.get("/api/v1/knowledge-base/stats").json()["verified"] == 1
 
 
 # --- statistics -------------------------------------------------------------------------------------------------------------------------
@@ -209,7 +210,7 @@ def test_stats_report_seed_versus_verified_records(client):
     client.post(f"/api/v1/tickets/{b}/correct", json={"root_cause": "Worn mechanical seal.", "recommended_fix": "Replace the seal."})
 
     stats = client.get("/api/v1/knowledge-base/stats").json()
-    assert stats == {"total": 30, "seed": 28, "verified": 2, "verified_confirmed": 1, "verified_corrected": 1}
+    assert stats == {"total": 30, "seed": 28, "verified": 2, "verified_confirmed": 1, "verified_corrected": 1, "failed": 0}
 
 
 def test_openapi_documents_the_review_endpoints(client):

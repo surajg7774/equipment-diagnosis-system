@@ -46,6 +46,18 @@ export function describeError(error: unknown): ErrorView {
           retryable: true,
         }
       }
+      // Session answers: the session can be gone (the server restarted and wiped its data) or the
+      // answer can be about a solution that is no longer the current one.
+      if (error.code === 'session_not_found') {
+        return {
+          title: 'This diagnosis session has expired',
+          message: 'The server no longer has it (it may have restarted). Please describe the problem again to start a new one.',
+          retryable: false,
+        }
+      }
+      if (error.code === 'session_conflict') {
+        return { title: 'This solution is out of date', message: error.message, retryable: false }
+      }
       // Image analysis has its own codes: the server's message is already user-facing
       // (e.g. "busy right now (rate limit), wait a minute").
       if (error.code === 'vision_unavailable') {

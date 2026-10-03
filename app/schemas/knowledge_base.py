@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.enums import Severity
+from app.schemas.enums import KnowledgeOutcome, Severity
 
 
 class KnowledgeBaseRecord(BaseModel):
@@ -18,9 +18,19 @@ class KnowledgeBaseRecord(BaseModel):
     root_cause: str = Field(examples=["Worn or failed bearings."])
     recommended_fix: str = Field(examples=["Replace the bearings and re-lubricate."])
     severity: Severity
-    source: Literal["seed", "verified"] = Field(
+    source: Literal["seed", "verified", "feedback"] = Field(
         default="seed",
-        description="'seed' = shipped with the system; 'verified' = added from a technician-reviewed ticket.",
+        description=(
+            "'seed' = shipped with the system; 'verified' = added from a confirmed or corrected ticket; "
+            "'feedback' = added from a thumbs-down (a fix that did not work)."
+        ),
+    )
+    outcome: KnowledgeOutcome | None = Field(
+        default=None,
+        description=(
+            "'verified_fix' = the fix worked; 'failed_fix' = it was suggested and did NOT work. "
+            "Null for seed records (curated resolved cases, treated as working fixes)."
+        ),
     )
 
 

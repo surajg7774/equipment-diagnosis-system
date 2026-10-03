@@ -333,6 +333,7 @@ def test_an_old_database_without_the_review_columns_is_upgraded_in_place():
         "review_status", "review_priority", "corrected_root_cause", "corrected_fix", "reviewed_at",
         "kb_record_id", "review_equipment_type",
         "diagnosis_basis", "llm_confidence",  # added for /stats
+        "failed_kb_record_id",  # added for thumbs-down "failed_fix" records
     }
     assert add_missing_columns(engine) == []  # idempotent
     from sqlalchemy.orm import sessionmaker

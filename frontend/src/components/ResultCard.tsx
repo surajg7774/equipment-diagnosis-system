@@ -16,16 +16,34 @@ function Block({ title, children, accent = false }: { title: string; children: R
   )
 }
 
-/** Result for a real equipment issue (is_valid_issue = true). */
-export function ResultCard({ data }: { data: DiagnoseResponse }) {
+/**
+ * Result for a real equipment issue (is_valid_issue = true).
+ * `footer` is the "Did this solve it?" area (or the resolved / escalated state) supplied by SessionFlow.
+ */
+export function ResultCard({ data, footer }: { data: DiagnoseResponse; footer?: ReactNode }) {
   const grounded = data.diagnosis_basis === 'similar_cases'
+  const attempt = data.attempt_number ?? null
+  // The thumbs rate the ticket's own diagnosis, which is the FIRST attempt. A later attempt in a session
+  // has its own "Did this solve it?" question instead, so the thumbs are not shown for it.
+  const showThumbs = data.ticket_id !== null && (attempt === null || attempt === 1)
+  const failedCases = data.similar_failed_cases ?? []
 
   return (
     <div className="space-y-5" data-testid="valid-result">
       <section className="space-y-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm" aria-label="Diagnosis">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-navy-900">Diagnosis</h2>
-          <div className="flex items-center gap-2">
+          <h2 className="text-lg font-semibold text-navy-900">
+            {attempt !== null && attempt > 1 ? 'Another possible solution' : 'Diagnosis'}
+          </h2>
+          <div className="flex flex-wrap items-center gap-2">
+            {attempt !== null && data.max_attempts && (
+              <span
+                className="rounded-md bg-navy-900 px-2 py-0.5 text-xs font-semibold text-white"
+                data-testid="attempt-badge"
+              >
+                Attempt {attempt} of {data.max_attempts}
+              </span>
+            )}
             {data.ticket_id !== null && (
               <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-600" data-testid="ticket-id">
                 Ticket #{data.ticket_id}
@@ -36,6 +54,40 @@ export function ResultCard({ data }: { data: DiagnoseResponse }) {
         </div>
 
         <BasisBanner basis={data.diagnosis_basis} note={data.note} caseCount={data.similar_cases.length} />
+
+        {failedCases.length > 0 && (
+          <div
+            className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3.5 text-amber-950"
+            data-testid="failed-cases-notice"
+          >
+            <InfoIcon className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">
+                A similar problem was reported before where {failedCases.length === 1 ? 'this approach' : 'these approaches'} did not work
+              </p>
+              <p className="mt-0.5 text-sm text-amber-900/90">The assistant was told to avoid repeating it and to suggest something else.</p>
+              <details className="mt-1.5 text-sm">
+                <summary className="cursor-pointer select-none text-xs font-medium text-amber-900 hover:underline">
+                  What did not work
+                </summary>
+                <ul className="mt-1.5 space-y-2 border-l-2 border-amber-300 pl-3">
+                  {failedCases.map((c) => (
+                    <li key={c.id} data-testid="failed-case">
+                      <p className="text-amber-950">
+                        <span className="font-medium">Diagnosis: </span>
+                        {c.root_cause}
+                      </p>
+                      <p className="whitespace-pre-line text-amber-900/90">
+                        <span className="font-medium">Fix: </span>
+                        {c.recommended_fix}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+          </div>
+        )}
 
         <Block title="Likely root cause">{data.diagnosis}</Block>
         <Block title="Recommended action" accent>
@@ -50,9 +102,10 @@ export function ResultCard({ data }: { data: DiagnoseResponse }) {
           grounded={grounded}
         />
 
-        {data.ticket_id !== null && (
-          <div className="border-t border-slate-100 pt-4">
-            <FeedbackButtons ticketId={data.ticket_id} initial={null} withLabel />
+        {(showThumbs || footer) && (
+          <div className="space-y-4 border-t border-slate-100 pt-4">
+            {showThumbs && <FeedbackButtons ticketId={data.ticket_id!} initial={null} withLabel />}
+            {footer}
           </div>
         )}
       </section>

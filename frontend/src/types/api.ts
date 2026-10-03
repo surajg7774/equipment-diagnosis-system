@@ -8,14 +8,20 @@ export type Severity = 'low' | 'medium' | 'high'
 /** What the diagnosis was grounded on. */
 export type DiagnosisBasis = 'similar_cases' | 'general_reasoning'
 
-/** Where a knowledge-base record came from. */
-export type KnowledgeBaseSource = 'seed' | 'verified'
+/** Where a knowledge-base record came from: shipped 'seed', a confirmed 'verified' fix, or 'feedback' (a fix that did not work). */
+export type KnowledgeBaseSource = 'seed' | 'verified' | 'feedback'
+
+/** Whether a feedback-derived record is a fix that worked or one that did NOT. Seed records have none (= worked). */
+export type KnowledgeOutcome = 'verified_fix' | 'failed_fix'
 
 /** Where a ticket is in the technician-verification workflow. */
 export type ReviewStatus = 'pending' | 'confirmed' | 'corrected'
 
 /** How urgently a pending ticket needs review (medium/high severity first). */
 export type ReviewPriority = 'high' | 'low'
+
+/** Where an iterative diagnosis session is. 'abandoned' = every attempt failed: escalate to a human. */
+export type SessionStatus = 'in_progress' | 'resolved' | 'abandoned'
 
 /** A knowledge-base record returned by the similarity search. */
 export interface SimilarCase {
@@ -27,14 +33,18 @@ export interface SimilarCase {
   severity: string
   /** Cosine similarity, 0-1. */
   similarity_score: number
-  /** 'verified' = added from a technician-reviewed ticket. Absent on older backends (= seed). */
+  /** 'verified' = added from a confirmed ticket. Absent on older backends (= seed). */
   source?: KnowledgeBaseSource
+  /** 'failed_fix' = this diagnosis + fix was suggested before and did NOT work. */
+  outcome?: KnowledgeOutcome | null
 }
 
 // --- POST /api/v1/diagnose ----------------------------------------------------
 export interface DiagnoseRequest {
   /** 10-2000 characters after trimming. */
   description: string
+  /** Optional kind of equipment, stored with the session (max 64 characters). */
+  equipment_type?: string
 }
 
 export interface DiagnoseResponse {
@@ -56,8 +66,60 @@ export interface DiagnoseResponse {
   confidence_score: number
   /** Can be empty (always empty when is_valid_issue is false). */
   similar_cases: SimilarCase[]
+  /** Close past cases whose fix a user reported did NOT work (thumbs down); the LLM was told to avoid them. */
+  similar_failed_cases?: SimilarCase[]
   diagnosis_basis: DiagnosisBasis
   note: string | null
+  /**
+   * The session this solution belongs to. null when is_valid_issue is false; absent on a backend that
+   * predates sessions (then the UI simply offers no "Did this solve it?" question).
+   */
+  session_id?: string | null
+  /** 1-based number of this solution within its session. */
+  attempt_number?: number | null
+  /** How many different solutions are offered before the user is told to escalate. */
+  max_attempts?: number | null
+}
+
+// --- POST /api/v1/sessions/{id}/feedback ---------------------------------------------------
+export interface SessionFeedbackResponse {
+  session_id: string
+  status: SessionStatus
+  resolved: boolean
+  /** True when every allowed attempt failed: hand the problem to a human technician. */
+  escalate: boolean
+  /** The attempt the user just answered about. */
+  attempt_number: number
+  max_attempts: number
+  message: string | null
+  added_to_knowledge_base: boolean
+  /** A new, different solution (same shape as /diagnose); null when resolved or escalated. */
+  next_attempt: DiagnoseResponse | null
+}
+
+/** One solution attempt as listed in history. */
+export interface SolutionAttemptOut {
+  attempt_number: number
+  diagnosis: string
+  recommended_action: string
+  severity: Severity
+  diagnosis_basis: DiagnosisBasis
+  retrieval_confidence: number
+  llm_confidence: number | null
+  /** true = it solved the problem, false = it did not, null = no answer yet. */
+  was_helpful: boolean | null
+  created_at: string
+}
+
+export interface SessionOut {
+  session_id: string
+  status: SessionStatus
+  attempt_count: number
+  /** For a resolved session, how many attempts it took; otherwise null. */
+  attempts_to_resolve: number | null
+  created_at: string
+  resolved_at: string | null
+  attempts: SolutionAttemptOut[]
 }
 
 // --- POST /api/v1/diagnose-image (AI visual assessment by a vision-language model) ---
@@ -101,6 +163,8 @@ export interface HistoryItem {
   reviewed_at: string | null
   /** The knowledge-base record built from this ticket, once reviewed. */
   kb_record_id: string | null
+  /** The iterative session behind a text ticket; null for photos and tickets from before sessions. */
+  session?: SessionOut | null
 }
 
 export interface HistoryPage {
@@ -123,6 +187,14 @@ export interface FeedbackResponse {
   ticket_id: number
   was_correct: boolean
   created_at: string
+  /**
+   * What the knowledge base now holds for this verdict: 'verified_fix' (thumbs up), 'failed_fix' (thumbs
+   * down), or null if nothing was recorded. Absent on a backend that predates this behaviour.
+   */
+  knowledge_base_outcome?: KnowledgeOutcome | null
+  /** Whether this request wrote to the knowledge base. */
+  knowledge_base_updated?: boolean
+  kb_record_id?: string | null
 }
 
 // --- Review workflow + knowledge-base statistics ---------------------------------------------
@@ -132,6 +204,8 @@ export interface KnowledgeBaseStats {
   verified: number
   verified_confirmed: number
   verified_corrected: number
+  /** 'failed_fix' records. Absent on a backend that predates thumbs-down learning. */
+  failed?: number
 }
 
 export interface CorrectionInput {
@@ -169,9 +243,22 @@ export interface StatsResponse {
   knowledge_base_size: number | null
   original_seed_count: number | null
   technician_verified_count: number | null
+  /** Records of fixes that WORKED / did NOT work (absent on an older backend). */
+  verified_fix_count?: number | null
+  failed_fix_count?: number | null
   review: { pending: number; confirmed: number; corrected: number }
   /** 0-1 scale; null when there is nothing to average. */
   average_confidence: { retrieval: number | null; llm: number | null; image: number | null }
+  /** Absent on a backend that predates sessions. */
+  sessions?: {
+    total: number
+    in_progress: number
+    resolved: number
+    /** Closed after every allowed attempt failed (escalated to a human). */
+    abandoned: number
+    /** Mean attempts across resolved sessions; null if none resolved yet. */
+    average_attempts_to_resolve: number | null
+  }
 }
 
 // --- GET /health -------------------------------------------------------------------------

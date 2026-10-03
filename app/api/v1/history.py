@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, Response, status
 
-from app.api.deps import TicketServiceDep
+from app.api.deps import FeedbackServiceDep, TicketServiceDep
 from app.schemas.common import ErrorResponse
 from app.schemas.enums import ReviewStatus
 from app.schemas.history import FeedbackRequest, FeedbackResponse, HistoryItem, HistoryPage
@@ -41,10 +41,16 @@ def list_history(
     "/feedback",
     response_model=FeedbackResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Tell the system whether a diagnosis was correct",
+    summary="Thumbs up / down on a diagnosis (teaches the knowledge base)",
     description=(
-        "Stores the technician's verdict for a ticket. Submitting feedback for the same "
-        "ticket again updates the earlier answer (returns 200 instead of 201)."
+        "Stores the verdict for a ticket, then teaches the knowledge base. **Thumbs up** "
+        "(`was_correct: true`) adds the AI's diagnosis as a confirmed working fix (`verified_fix`), "
+        "like a technician's confirm. **Thumbs down** adds a separate `failed_fix` record of the "
+        "diagnosis + fix that did NOT work; it deletes nothing and does not mark the ticket reviewed. "
+        "Later diagnoses of similar problems show the LLM both kinds, clearly labelled, so it steers "
+        "away from known failures. Submitting feedback for the same ticket again updates the earlier "
+        "answer (returns 200 instead of 201). If the vector store is unavailable the verdict is still "
+        "saved and `knowledge_base_updated` is false."
     ),
     responses={
         200: {"model": FeedbackResponse, "description": "Existing feedback updated."},
@@ -53,9 +59,18 @@ def list_history(
     },
 )
 def submit_feedback(
-    payload: FeedbackRequest, response: Response, tickets: TicketServiceDep
+    payload: FeedbackRequest, response: Response, feedback_service: FeedbackServiceDep
 ) -> FeedbackResponse:
-    feedback, created = tickets.save_feedback(payload.ticket_id, payload.was_correct)
-    if not created:
+    outcome = feedback_service.submit(payload.ticket_id, payload.was_correct)
+    if not outcome.created:
         response.status_code = status.HTTP_200_OK
-    return FeedbackResponse.model_validate(feedback)
+    feedback = outcome.feedback
+    return FeedbackResponse(
+        id=feedback.id,
+        ticket_id=feedback.ticket_id,
+        was_correct=feedback.was_correct,
+        created_at=feedback.created_at,
+        knowledge_base_outcome=outcome.knowledge_base_outcome,
+        knowledge_base_updated=outcome.knowledge_base_updated,
+        kb_record_id=outcome.kb_record_id,
+    )

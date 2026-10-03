@@ -45,7 +45,9 @@ services:
         value: onnx
       - key: AUTO_SEED_ON_STARTUP   # refill the knowledge base on boot (the free disk is wiped on restart)
         value: "true"
-      - key: RATE_LIMIT_PER_MINUTE  # per client, on /diagnose and /diagnose-image; 0 turns it off
+      - key: MAX_SOLUTION_ATTEMPTS  # different solutions per problem before "escalate to a human technician"
+        value: "4"
+      - key: RATE_LIMIT_PER_MINUTE  # per client, on /diagnose, /diagnose-image and each "No" in a session; 0 turns it off
         value: "10"
       # Render's proxy puts the caller's address into X-Forwarded-For. 1 = "trust the last entry".
       # Too low only makes clients share a bucket; too high would let a client forge its address.

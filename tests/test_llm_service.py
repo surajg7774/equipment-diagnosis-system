@@ -65,7 +65,7 @@ def test_prompt_without_context_asks_for_general_reasoning_and_omits_cases():
     messages = build_messages("forklift mast jerks", [])
 
     user = messages[1]["content"]
-    assert "No similar past case was found" in user
+    assert "No similar past case with a confirmed working fix was found" in user
     assert "general engineering knowledge" in user
     assert "Case 1" not in user
     assert "<issue>\nforklift mast jerks\n</issue>" in user
@@ -293,7 +293,17 @@ def test_missing_is_valid_issue_defaults_to_true_so_real_reports_are_never_dropp
 def test_prompts_ask_the_llm_to_judge_whether_the_input_is_an_equipment_issue():
     for context in ([_case(1)], []):
         user = build_messages("what is the capital of France", context)[1]["content"]
-        assert "is_valid_issue" in user and "unrelated to equipment" in user
+        assert "is_valid_issue" in user and "NOT about a malfunctioning physical device" in user
+
+
+def test_the_validity_bar_is_any_physical_device_not_a_list_of_known_categories():
+    """Regression for "my mobile phone won't turn on" being rejected as 'not an equipment issue'."""
+    system, user = (m["content"] for m in build_messages("my mobile phone won't turn on", [])[0:2])
+
+    assert "ANY physical device" in system and "mobile phones" in system
+    assert "of ANY kind" in user and "a phone that will not turn on" in user  # valid by the prompt's own example
+    assert "general-knowledge or trivia question" in user  # ...while real non-issues are still rejected
+    assert "one of our" not in user and "known categor" not in user  # no "must be a category we know" rule
 
 
 def test_ollama_schema_requires_is_valid_issue_as_a_boolean():

@@ -22,8 +22,8 @@ Other scripts: `npm run build` (type-check + production build), `npm run lint`.
 ## Pages
 
 * **Diagnose** (`/`): describe a problem (min 10 characters, validated inline), optionally pick an
-  equipment type (a UI hint only: it changes the placeholder; the backend's diagnose endpoint takes
-  just a description, and the text is sent exactly as typed), and optionally upload a photo for an **AI visual assessment** (a vision model describes visible
+  equipment type (free text with suggestions; sent as its own field, the description is sent exactly as
+  typed), and optionally upload a photo for an **AI visual assessment** (a vision model describes visible
   damage, wear, leaks or corrosion; the card shows the findings, severity, a damage chip and the
   model's confidence, and always carries the caveat *"AI-generated visual assessment — not a
   substitute for professional inspection"*). A photo that is not equipment gets a neutral card and
@@ -33,10 +33,26 @@ Other scripts: `npm run build` (type-check + production build), `npm run lint`.
     reasoning*; similar cases are listed below.
   * **Not an equipment issue** (`is_valid_issue: false`): a neutral message with the assistant's
     reply and a "No ticket created" notice. No severity, ticket id or confidence is rendered.
+* **Thumbs up / down** (Diagnose page, on the first diagnosis): *Was this diagnosis correct?* Each verdict
+  now teaches the knowledge base and the UI says how: a thumbs up records a **confirmed working fix**, a
+  thumbs down records **an approach that did not work**, so similar future problems avoid it. When a past
+  failure influenced an answer, an amber notice says so and lists what did not work. The History bar and
+  the Stats page count the working and failed fixes.
+* **Iterative flow** (Diagnose page): every valid diagnosis opens a *session*. The card is labelled
+  **Attempt 1 of 4** and asks **"Did this solve it?"**. *No, try something else* swaps a different solution
+  into the same card (**Attempt 2 of 4**, then 3, 4) while the earlier ones collect in a collapsible
+  **Previous attempts that did not work** list. *Yes, it's fixed* ends in a green **Resolved!** panel (and
+  says if the solution was added to the knowledge base). If the last attempt fails, an amber (not red)
+  notice asks the user to **escalate to a human technician**. Buttons are disabled while a new solution is
+  being generated, a failed request keeps the same question available (nothing was saved), and an expired
+  session (the server restarted) says so. The equipment type is now free text with suggestions: any
+  device is accepted.
 * **History** (`/history`): paginated ticket table with a **Review** column: each ticket is *Pending review*
   (medium/high severity marked "Review first"), *Confirmed* or *Corrected*. A technician can **Confirm** a
   correct diagnosis or **Correct** it with the real root cause and fix (an inline form); either adds the case
-  to the knowledge base. *Show details* compares the AI's version with the technician's. A bar at the top
+  to the knowledge base. Each row also shows its **session**: *In progress* / *Resolved in N attempts* /
+  *Needs a human technician*, and *Show details* lists every attempt with whether it worked, then compares
+  the AI's first version with the technician's. A bar at the top
   shows the knowledge base growing (seed vs verified records), and tabs filter by review status. Cases
   retrieved on the Diagnose page that came from a technician carry a "Verified by a technician" chip.
 * **Stats** (`/stats`): a small dashboard fed by `GET /api/v1/stats`: stat cards for diagnoses performed,
@@ -52,7 +68,7 @@ src/
   api/client.ts      typed fetch wrapper; every failure becomes an ApiError (network/timeout/validation/server)
   types/api.ts       TypeScript mirror of the backend contracts
   pages/             DiagnosePage, HistoryPage, StatsPage
-  components/        ResultCard, BasisBanner, SeverityBadge, ConfidenceBar, FeedbackButtons, ...
+  components/        ResultCard, SessionFlow, SessionBadge, BasisBanner, SeverityBadge, ConfidenceBar, ...
   lib/               error-to-message mapping, formatting helpers
 ```
 

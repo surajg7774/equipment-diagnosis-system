@@ -2,10 +2,11 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import diagnose, history, review, stats
+from app.api.v1 import diagnose, history, review, sessions, stats
 
 api_v1_router = APIRouter(prefix="/api/v1")
 api_v1_router.include_router(diagnose.router)
+api_v1_router.include_router(sessions.router)
 api_v1_router.include_router(history.router)
 api_v1_router.include_router(review.router)
 api_v1_router.include_router(stats.router)

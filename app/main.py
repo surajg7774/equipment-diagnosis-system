@@ -77,8 +77,10 @@ async def lifespan(app: FastAPI):
     knowledge_base = KnowledgeBaseService(collection, embedder)
     try:
         with session_factory() as session:
-            reviewed = session.scalars(select(Ticket).where(Ticket.kb_record_id.is_not(None))).all()
-            knowledge_base.restore_missing(reviewed)
+            with_records = session.scalars(
+                select(Ticket).where(Ticket.kb_record_id.is_not(None) | Ticket.failed_kb_record_id.is_not(None))
+            ).all()
+            knowledge_base.restore_missing(with_records)
     except Exception:  # never block startup on this: reviews still work, and retrieval still has the seed
         logger.exception("verified_cases_restore_failed")
 

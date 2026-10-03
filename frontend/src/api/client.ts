@@ -16,6 +16,7 @@ import type {
   KnowledgeBaseStats,
   ReviewResponse,
   ReviewStatus,
+  SessionFeedbackResponse,
   StatsResponse,
 } from '../types/api'
 
@@ -175,10 +176,14 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 }
 
 // --- Endpoints ------------------------------------------------------------------------------------
-export function diagnose(description: string, signal?: AbortSignal): Promise<DiagnoseResponse> {
+export function diagnose(
+  description: string,
+  signal?: AbortSignal,
+  equipmentType?: string,
+): Promise<DiagnoseResponse> {
   return request<DiagnoseResponse>('/api/v1/diagnose', {
     method: 'POST',
-    json: { description },
+    json: equipmentType ? { description, equipment_type: equipmentType } : { description },
     timeoutMs: DIAGNOSE_TIMEOUT_MS,
     signal,
   })
@@ -230,6 +235,10 @@ export function getStats(signal?: AbortSignal): Promise<StatsResponse> {
   return request<StatsResponse>('/api/v1/stats', { signal })
 }
 
+/**
+ * Thumbs up / down on a diagnosis. The backend also teaches the knowledge base: a thumbs up records a
+ * confirmed working fix, a thumbs down records a fix that did NOT work (see `knowledge_base_outcome`).
+ */
 export function submitFeedback(
   ticketId: number,
   wasCorrect: boolean,
@@ -238,6 +247,25 @@ export function submitFeedback(
   return request<FeedbackResponse>('/api/v1/feedback', {
     method: 'POST',
     json: { ticket_id: ticketId, was_correct: wasCorrect },
+    signal,
+  })
+}
+
+/**
+ * "Did this solve it?" For a no, the backend generates a different solution with an LLM call, so this
+ * uses the long diagnosis timeout. `attemptNumber` makes a double click or stale tab fail with a 409
+ * instead of silently skipping a solution.
+ */
+export function sendSessionFeedback(
+  sessionId: string,
+  wasHelpful: boolean,
+  attemptNumber: number,
+  signal?: AbortSignal,
+): Promise<SessionFeedbackResponse> {
+  return request<SessionFeedbackResponse>(`/api/v1/sessions/${sessionId}/feedback`, {
+    method: 'POST',
+    json: { was_helpful: wasHelpful, attempt_number: attemptNumber },
+    timeoutMs: DIAGNOSE_TIMEOUT_MS,
     signal,
   })
 }

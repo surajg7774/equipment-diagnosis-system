@@ -5,7 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.enums import ReviewPriority, ReviewStatus, Severity
+from app.schemas.enums import KnowledgeOutcome, ReviewPriority, ReviewStatus, Severity
+from app.schemas.session import SessionOut
 
 
 class HistoryItem(BaseModel):
@@ -28,6 +29,12 @@ class HistoryItem(BaseModel):
     corrected_fix: str | None = Field(default=None, description="The technician's fix, if corrected.")
     reviewed_at: datetime | None = None
     kb_record_id: str | None = Field(default=None, description="Knowledge-base record built from this ticket, if reviewed.")
+    # Read from the ORM relationship `Ticket.diagnosis_session`; null for photo tickets and tickets from before sessions.
+    session: SessionOut | None = Field(
+        default=None,
+        validation_alias="diagnosis_session",
+        description="The iterative diagnosis session (status, attempts) behind this ticket, if it has one.",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -88,12 +95,32 @@ class FeedbackResponse(BaseModel):
     ticket_id: int
     was_correct: bool
     created_at: datetime
+    knowledge_base_outcome: KnowledgeOutcome | None = Field(
+        default=None,
+        description=(
+            "What the knowledge base now holds for this verdict: 'verified_fix' (thumbs up: a confirmed working "
+            "fix), 'failed_fix' (thumbs down: a fix that did NOT work), or null if nothing was recorded "
+            "(e.g. a technician already corrected the ticket, or the vector store was unavailable)."
+        ),
+    )
+    knowledge_base_updated: bool = Field(
+        default=False, description="Whether THIS request wrote to the knowledge base (false for a repeated verdict)."
+    )
+    kb_record_id: str | None = Field(default=None, description="The knowledge-base record behind the verdict, if any.")
 
     model_config = ConfigDict(
         from_attributes=True,
         json_schema_extra={
             "examples": [
-                {"id": 7, "ticket_id": 42, "was_correct": True, "created_at": "2026-10-02T10:02:11Z"}
+                {
+                    "id": 7,
+                    "ticket_id": 42,
+                    "was_correct": False,
+                    "created_at": "2026-10-02T10:02:11Z",
+                    "knowledge_base_outcome": "failed_fix",
+                    "knowledge_base_updated": True,
+                    "kb_record_id": "FC-42-a3f9c1",
+                }
             ]
         },
     )

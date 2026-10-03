@@ -67,6 +67,7 @@ export function StatsPage() {
 
 function StatsDashboard({ stats }: { stats: StatsResponse }) {
   const { resolution, review, average_confidence: confidence } = stats
+  const sessions = stats.sessions // absent on a backend that predates sessions
   const kbAvailable = stats.knowledge_base_size !== null
 
   return (
@@ -105,7 +106,11 @@ function StatsDashboard({ stats }: { stats: StatsResponse }) {
         <StatCard
           label="Knowledge base records"
           value={kbAvailable ? String(stats.knowledge_base_size) : NO_VALUE}
-          hint={kbAvailable ? `${stats.original_seed_count} seed · ${stats.technician_verified_count} verified` : 'Unavailable right now'}
+          hint={
+            kbAvailable
+              ? `${stats.original_seed_count} seed · ${stats.verified_fix_count ?? stats.technician_verified_count} verified · ${stats.failed_fix_count ?? 0} failed`
+              : 'Unavailable right now'
+          }
           testId="stat-kb"
         />
         <StatCard
@@ -140,7 +145,7 @@ function StatsDashboard({ stats }: { stats: StatsResponse }) {
         </Panel>
 
         {/* ---- Knowledge base growth ---- */}
-        <Panel title="Knowledge base" subtitle="Original records vs cases added from technician reviews." testId="panel-kb">
+        <Panel title="Knowledge base" subtitle="Original records, fixes confirmed to work, and fixes reported not to." testId="panel-kb">
           {!kbAvailable ? (
             <p className="text-sm text-slate-500">The knowledge base could not be read right now. Usage numbers are still shown.</p>
           ) : (
@@ -148,13 +153,15 @@ function StatsDashboard({ stats }: { stats: StatsResponse }) {
               <SplitBar
                 parts={[
                   { label: 'Original seed', value: stats.original_seed_count ?? 0, className: 'bg-slate-400' },
-                  { label: 'Technician verified', value: stats.technician_verified_count ?? 0, className: 'bg-accent-500' },
+                  { label: 'Verified fixes', value: stats.verified_fix_count ?? stats.technician_verified_count ?? 0, className: 'bg-accent-500' },
+                  { label: 'Failed fixes', value: stats.failed_fix_count ?? 0, className: 'bg-amber-400' },
                 ]}
-                ariaLabel={`${stats.original_seed_count} seed records and ${stats.technician_verified_count} technician-verified records`}
+                ariaLabel={`${stats.original_seed_count} seed records, ${stats.verified_fix_count ?? stats.technician_verified_count} verified fixes and ${stats.failed_fix_count ?? 0} failed fixes`}
               />
               <dl className="mt-3 space-y-1.5 text-sm">
                 <Row label="Original seed" dotClass="bg-slate-400" value={String(stats.original_seed_count)} testId="kb-seed-count" />
-                <Row label="Technician verified" dotClass="bg-accent-500" value={String(stats.technician_verified_count)} testId="kb-verified-count" />
+                <Row label="Verified fixes (worked)" dotClass="bg-accent-500" value={String(stats.verified_fix_count ?? stats.technician_verified_count)} testId="kb-verified-count" />
+                <Row label="Failed fixes (did not work)" dotClass="bg-amber-400" value={String(stats.failed_fix_count ?? 0)} testId="kb-failed-count" />
               </dl>
             </>
           )}
@@ -168,6 +175,37 @@ function StatsDashboard({ stats }: { stats: StatsResponse }) {
             <MeterRow label="Photo assessments" note="Vision model's own certainty" value={confidence.image} testId="avg-image" />
           </div>
         </Panel>
+
+        {/* ---- Diagnosis sessions ---- */}
+        {sessions && (
+          <Panel title="Diagnosis sessions" subtitle="Problems worked through one solution at a time." testId="panel-sessions">
+            {sessions.total === 0 ? (
+              <p className="text-sm text-slate-500">No sessions yet.</p>
+            ) : (
+              <>
+                <SplitBar
+                  parts={[
+                    { label: 'Resolved', value: sessions.resolved, className: 'bg-emerald-500' },
+                    { label: 'In progress', value: sessions.in_progress, className: 'bg-sky-400' },
+                    { label: 'Needs a human', value: sessions.abandoned, className: 'bg-amber-400' },
+                  ]}
+                  ariaLabel={`${sessions.resolved} resolved, ${sessions.in_progress} in progress and ${sessions.abandoned} escalated sessions`}
+                />
+                <dl className="mt-3 space-y-1.5 text-sm">
+                  <Row label="Resolved" dotClass="bg-emerald-500" value={String(sessions.resolved)} testId="sessions-resolved" />
+                  <Row label="In progress" dotClass="bg-sky-400" value={String(sessions.in_progress)} testId="sessions-in-progress" />
+                  <Row label="Needs a human technician" dotClass="bg-amber-400" value={String(sessions.abandoned)} testId="sessions-abandoned" />
+                  <Row
+                    label="Average attempts to resolve"
+                    dotClass="bg-slate-300"
+                    value={sessions.average_attempts_to_resolve === null ? NO_VALUE : String(sessions.average_attempts_to_resolve)}
+                    testId="sessions-avg-attempts"
+                  />
+                </dl>
+              </>
+            )}
+          </Panel>
+        )}
 
         {/* ---- Review progress ---- */}
         <Panel title="Review progress" subtitle="Tickets a technician has checked." testId="panel-review">

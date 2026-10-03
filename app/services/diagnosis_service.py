@@ -1,12 +1,15 @@
 """The RAG diagnosis pipeline (Retrieval-Augmented Generation).
 
     description
-        |  1. RETRIEVE   embed -> ChromaDB top-k similar past cases
+        |  1. RETRIEVE   embed -> ChromaDB top-k similar past cases with WORKING fixes
+        |                (seed + verified), and separately the close cases whose fix a user
+        |                reported did NOT work (failed_fix)
         v
     similar cases + similarity score
         |  2. DECIDE     is the best match close enough (>= threshold)?
         |                  yes -> pass the cases to the LLM as reference examples
         |                  no  -> pass nothing; the LLM uses general knowledge
+        |                close failed fixes are always passed, labelled "did NOT work"
         v
         |  3. GENERATE   LLM writes a NEW diagnosis + fix + severity for THIS issue
         v
@@ -24,18 +27,19 @@ handle issues that match nothing in the knowledge base.
 """
 
 import logging
+import math
 import time
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from chromadb.api.models.Collection import Collection
 
 from app.core.exceptions import KnowledgeBaseEmptyError
-from app.schemas.enums import DiagnosisBasis, Severity
+from app.schemas.enums import DiagnosisBasis, KnowledgeOutcome, Severity
 from app.schemas.knowledge_base import SimilarCase
 from app.services.embedding_service import Embedder
-from app.services.llm_service import DEFAULT_LLM_CONFIDENCE, LLMService
+from app.services.llm_service import DEFAULT_LLM_CONFIDENCE, LLMDiagnosis, LLMService, PreviousAttempt
 from app.services.severity import classify_severity, combine_severity
 
 logger = logging.getLogger(__name__)
@@ -44,6 +48,23 @@ logger = logging.getLogger(__name__)
 # charset header, and some Windows clients (e.g. PowerShell 5.1) would show an em dash garbled.
 NO_MATCH_NOTE = "No closely matching past case found - diagnosis based on general reasoning."
 INVALID_INPUT_NOTE = "This does not appear to describe an equipment issue, so it was not saved to ticket history."
+REPEAT_NOTE = (
+    "This suggestion is similar to one that already did not work (earlier in this session or for a similar "
+    "past problem); treat it with caution."
+)
+
+# Two searches over the same collection. Seed records have no "outcome" key at all: Chroma's $ne keeps
+# records that lack the key (pinned by a test against real ChromaDB), so they count as working fixes.
+WORKING_FIXES = {"outcome": {"$ne": KnowledgeOutcome.FAILED_FIX.value}}
+FAILED_FIXES = {"outcome": KnowledgeOutcome.FAILED_FIX.value}
+
+# A new attempt whose embedding is at least this similar to a failed one counts as a repeat.
+# This is a backstop for NEAR-VERBATIM repeats only, not a classifier: measured with the real
+# all-MiniLM-L6-v2, genuinely different causes for the same equipment scored up to 0.82 (e.g. toner
+# cartridge vs firmware fault on a printer) while honest rewordings of one cause scored anywhere from
+# 0.74 to 0.94, so no threshold separates the two. 0.90 never fired on any different-cause pair we
+# measured. Telling the model what already failed (the prompt) is what makes attempts differ.
+REPEAT_SIMILARITY = 0.90
 
 
 @dataclass(frozen=True)
@@ -60,6 +81,8 @@ class DiagnosisResult:
     similar_cases: list[SimilarCase]
     diagnosis_basis: DiagnosisBasis
     note: str | None
+    # Close past cases whose fix a user reported did NOT work; shown to the LLM as "did NOT work".
+    failed_cases: list[SimilarCase] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +124,17 @@ def has_close_match(cases: list[SimilarCase], threshold: float) -> bool:
     return bool(cases) and cases[0].similarity_score >= threshold
 
 
+def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
+    """Cosine similarity of two vectors (0 if either is all zeros)."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
+    return dot / norm if norm else 0.0
+
+
+def solution_text(root_cause: str, recommended_fix: str) -> str:
+    return f"{root_cause} {recommended_fix}"
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -130,25 +164,43 @@ class DiagnosisService:
         """Whether the LLM backend is reachable with its model available (used by /health)."""
         return self._llm.is_ready()
 
-    def find_similar_cases(self, description: str) -> list[SimilarCase]:
-        """Return the ``top_k`` most similar past cases, best first."""
-        query_vector = self._embedder.embed([description])[0]
+    def _search(self, query_vector: list[float], where: dict) -> list[SimilarCase]:
         raw = self._collection.query(
             query_embeddings=[query_vector],
             n_results=self._top_k,
+            where=where,
             include=["metadatas", "distances"],
         )
         return parse_chroma_results(raw)
 
-    def diagnose(self, description: str) -> DiagnosisResult:
+    def find_similar_cases(self, description: str) -> list[SimilarCase]:
+        """Return the ``top_k`` most similar past cases with WORKING fixes (seed + verified), best first."""
+        return self._search(self._embedder.embed([description])[0], WORKING_FIXES)
+
+    def _repeats_a_ruled_out_solution(self, result: LLMDiagnosis, ruled_out: Sequence[tuple[str, str]]) -> bool:
+        """True if the new solution is (nearly) the same as a (root cause, fix) known not to work."""
+        texts = [solution_text(result.root_cause, result.recommended_fix)]
+        texts += [solution_text(root_cause, fix) for root_cause, fix in ruled_out]
+        vectors = self._embedder.embed(texts)
+        return max(cosine_similarity(vectors[0], v) for v in vectors[1:]) >= REPEAT_SIMILARITY
+
+    def diagnose(self, description: str, previous_attempts: Sequence[PreviousAttempt] = ()) -> DiagnosisResult:
+        """Diagnose ``description``; with ``previous_attempts`` propose something DIFFERENT from them."""
         started = time.perf_counter()
 
-        # 1. RETRIEVE
-        cases = self.find_similar_cases(description)
+        # 1. RETRIEVE (one embedding, two searches: fixes that worked, and fixes that did not)
+        query_vector = self._embedder.embed([description])[0]
+        cases = self._search(query_vector, WORKING_FIXES)
         if not cases:
             raise KnowledgeBaseEmptyError(
                 "The knowledge base is empty. Run `python -m app.db.seed` to load it."
             )
+        # Only CLOSE failures count (the same bar as a close match): a failed fix for an unrelated
+        # problem must never steer the model. They do not count as coverage either, so
+        # retrieval_confidence and the basis below are about working fixes only.
+        failed_cases = [
+            c for c in self._search(query_vector, FAILED_FIXES) if c.similarity_score >= self._low_confidence_threshold
+        ]
         retrieval_done = time.perf_counter()
         retrieval_confidence = cases[0].similarity_score
 
@@ -158,7 +210,26 @@ class DiagnosisService:
 
         # 3. GENERATE. Errors (LLMUnavailableError / LLMResponseError) propagate
         # on purpose: we never fall back to presenting a raw lookup as a diagnosis.
-        llm_result = self._llm.generate_diagnosis(description, cases if grounded else [])
+        context = cases if grounded else []
+        llm_result = self._llm.generate_diagnosis(description, context, previous_attempts, failed_cases)
+        # Everything known NOT to work for this problem: earlier attempts in this session, and close
+        # failed fixes from the knowledge base.
+        ruled_out = [(a.root_cause, a.recommended_fix) for a in previous_attempts]
+        ruled_out += [(c.root_cause, c.recommended_fix) for c in failed_cases]
+        repeated = False
+        if ruled_out and self._repeats_a_ruled_out_solution(llm_result, ruled_out):
+            # Asking nicely was not enough: show the model its own repeat, listed as ruled out, and ask once more.
+            logger.warning(
+                "diagnosis_repeated_ruled_out_solution",
+                extra={"attempts_so_far": len(previous_attempts), "failed_cases": len(failed_cases)},
+            )
+            repeat = PreviousAttempt(
+                attempt_number=max((a.attempt_number for a in previous_attempts), default=0) + 1,
+                root_cause=llm_result.root_cause,
+                recommended_fix=llm_result.recommended_fix,
+            )
+            llm_result = self._llm.generate_diagnosis(description, context, [*previous_attempts, repeat], failed_cases)
+            repeated = self._repeats_a_ruled_out_solution(llm_result, ruled_out)
         llm_done = time.perf_counter()
 
         # The LLM reports 0-100; the API uses 0-1 for both confidences. A missing/garbled value
@@ -171,7 +242,8 @@ class DiagnosisService:
         # Trust the LLM's "not an equipment issue" verdict only if the keyword heuristic
         # also saw no trouble words. A small model wrongly discarding a real report
         # ("caught fire") is far worse than keeping a junk one, so the heuristic is a floor.
-        is_valid = llm_result.is_valid_issue or heuristic.score > 0
+        # (A follow-up attempt is for a report that was already accepted, so it is always valid.)
+        is_valid = bool(previous_attempts) or llm_result.is_valid_issue or heuristic.score > 0
         severity = combine_severity(heuristic.level, llm_result.severity) if is_valid else None
 
         # One structured log line per diagnosis. We log the description's
@@ -191,6 +263,9 @@ class DiagnosisService:
                 "llm_confidence_defaulted": llm_confidence_defaulted,
                 "top_match_id": cases[0].id,
                 "diagnosis_basis": basis.value,
+                "previous_attempts": len(previous_attempts),
+                "failed_cases": len(failed_cases),
+                "repeated_ruled_out_solution": repeated,
                 "retrieval_ms": round((retrieval_done - started) * 1000, 1),
                 "llm_ms": round((llm_done - retrieval_done) * 1000, 1),
                 "latency_ms": round((llm_done - started) * 1000, 1),
@@ -198,6 +273,8 @@ class DiagnosisService:
         )
 
         note = None if grounded else NO_MATCH_NOTE
+        if repeated:
+            note = REPEAT_NOTE if note is None else f"{note} {REPEAT_NOTE}"
         if not is_valid:
             note = INVALID_INPUT_NOTE
 
@@ -212,4 +289,5 @@ class DiagnosisService:
             similar_cases=cases if is_valid else [],  # irrelevant noise for a non-issue
             diagnosis_basis=basis,
             note=note,
+            failed_cases=failed_cases if is_valid else [],
         )

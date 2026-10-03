@@ -7,6 +7,7 @@ import { KnowledgeBaseBar } from '../components/KnowledgeBaseBar'
 import { Pagination } from '../components/Pagination'
 import { ReviewActions } from '../components/ReviewActions'
 import { ReviewBadge } from '../components/ReviewBadge'
+import { AttemptsTimeline, SessionBadge } from '../components/SessionBadge'
 import { SeverityBadge } from '../components/SeverityBadge'
 import { InboxIcon, RefreshIcon } from '../components/icons'
 import { formatDateTime, toPercent, truncate } from '../lib/format'
@@ -202,6 +203,10 @@ export function HistoryPage() {
                   const expanded = expandedId === item.id || editingId === item.id
                   // Photo tickets are stored as "[image upload] <file name>"; the PHOTO chip says that already.
                   const issueText = item.description.replace(/^\[image upload\]\s*/, '')
+                  // For a session the row shows the CURRENT (latest) solution, which is the one that worked once resolved.
+                  const session = item.session ?? null
+                  const latestAttempt = session?.attempts[session.attempts.length - 1]
+                  const shownDiagnosis = latestAttempt?.diagnosis ?? item.diagnosis
                   return (
                     <Fragment key={item.id}>
                       <tr className="align-top hover:bg-slate-50/70" data-testid="history-row" data-status={item.review_status}>
@@ -216,9 +221,14 @@ export function HistoryPage() {
                             )}
                             {truncate(issueText, 90)}
                           </p>
-                          <p className="mt-0.5 text-slate-800" title={item.diagnosis}>
-                            {truncate(item.diagnosis, 140)}
+                          <p className="mt-0.5 text-slate-800" title={shownDiagnosis}>
+                            {truncate(shownDiagnosis, 140)}
                           </p>
+                          {session && (
+                            <div className="mt-1.5">
+                              <SessionBadge session={session} />
+                            </div>
+                          )}
                           <button
                             type="button"
                             onClick={() => setExpandedId(expanded ? null : item.id)}
@@ -254,9 +264,13 @@ export function HistoryPage() {
                               <p className="whitespace-pre-line">{issueText}</p>
                             </div>
 
+                            {session && session.attempts.length > 0 && <AttemptsTimeline session={session} />}
+
                             <div className="grid gap-3 md:grid-cols-2" data-testid="comparison">
                               <div className="rounded-lg border border-slate-200 bg-white p-3" data-testid="ai-version">
-                                <h4 className="text-xs font-semibold uppercase text-slate-500">AI diagnosis</h4>
+                                <h4 className="text-xs font-semibold uppercase text-slate-500">
+                                  AI diagnosis{session && session.attempt_count > 1 ? ' (first attempt)' : ''}
+                                </h4>
                                 <p className="mt-1 whitespace-pre-line">{item.diagnosis}</p>
                                 <h4 className="mt-2 text-xs font-semibold uppercase text-slate-500">AI recommended action</h4>
                                 <p className="mt-1 whitespace-pre-line">{item.recommended_action}</p>

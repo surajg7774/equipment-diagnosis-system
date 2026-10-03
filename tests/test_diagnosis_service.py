@@ -64,6 +64,15 @@ class StubEmbedder:
 def mock_collection():
     collection = MagicMock()
     collection.query.return_value = CLOSE_MATCH_RESPONSE
+
+    # The service searches twice: working fixes, then failed fixes. This mocked knowledge base holds no
+    # failed-fix records, so that search finds nothing; every other search returns `query.return_value`.
+    def query(**kwargs):
+        if kwargs.get("where") == {"outcome": "failed_fix"}:
+            return EMPTY_RESPONSE
+        return collection.query.return_value
+
+    collection.query.side_effect = query
     return collection
 
 
@@ -219,7 +228,7 @@ class RawTextLLM(LLMService):
     def __init__(self, raw: str):
         self.raw = raw
 
-    def generate_diagnosis(self, user_input, context_examples):
+    def generate_diagnosis(self, user_input, context_examples, previous_attempts=(), failed_examples=()):
         return parse_llm_output(self.raw)
 
     def is_ready(self):

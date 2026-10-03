@@ -127,6 +127,11 @@ class Settings(BaseSettings):
     # app/core/rate_limit.py). 0 = ignore the header (local use). On Render start with 1.
     rate_limit_proxy_hops: int = Field(default=0, ge=0, le=5)
 
+    # --- Iterative diagnosis sessions ----------------------------------------------
+    # How many different solutions are offered for one problem before the user is told to
+    # escalate to a human technician (each "No" costs one LLM call).
+    max_solution_attempts: int = Field(default=4, ge=1, le=10)
+
     @property
     def cors_origins(self) -> list[str]:
         """ALLOWED_ORIGINS as a clean list ("*" allowed; trailing slashes removed)."""

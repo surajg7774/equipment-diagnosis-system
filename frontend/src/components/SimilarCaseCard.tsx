@@ -17,10 +17,10 @@ export function SimilarCaseCard({ item }: { item: SimilarCase }) {
         <p
           className="mt-2 inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-900 ring-1 ring-inset ring-accent-500/40"
           data-testid="verified-chip"
-          title="Added to the knowledge base from a ticket a technician confirmed or corrected"
+          title="Added to the knowledge base from a diagnosis that was confirmed to work (thumbs up, or a technician's confirm or correction)"
         >
           <CheckCircleIcon className="h-3 w-3" />
-          Verified by a technician
+          Confirmed working fix
         </p>
       )}
       <p className="mt-2 text-sm text-slate-800">{item.issue_description}</p>

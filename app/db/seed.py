@@ -28,6 +28,10 @@ from app.services.embedding_service import Embedder, create_embedder
 
 logger = logging.getLogger(__name__)
 
+# Knowledge-base records that come from real usage rather than the seed file: "verified" (a fix that
+# was confirmed to work) and "feedback" (a fix that a user reported did NOT work).
+FEEDBACK_SOURCES = ("verified", "feedback")
+
 
 @dataclass(frozen=True)
 class SeedReport:
@@ -71,7 +75,7 @@ def seed_knowledge_base(
 ) -> SeedReport:
     """Make the SEED part of ``collection`` match ``records`` exactly (idempotent).
 
-    Verified technician cases already in the collection are left untouched.
+    Records created from feedback (verified fixes and failed fixes) are left untouched.
     """
     ids = [r.id for r in records]
 
@@ -85,14 +89,14 @@ def seed_knowledge_base(
         )
 
     # Remove SEED records that were deleted from the JSON file since the last run.
-    # Records verified by technicians (source="verified") are real-world knowledge, not part of
-    # the seed file, so a re-seed must never touch them. (Records stored before the "source"
-    # field existed have none and count as seed.)
+    # Records created from real usage (source "verified" = a fix that worked, "feedback" = a fix that
+    # did not) are not part of the seed file, so a re-seed must never touch them. (Records stored
+    # before the "source" field existed have none and count as seed.)
     stored = collection.get(include=["metadatas"])
     stale_ids = sorted(
         record_id
         for record_id, metadata in zip(stored["ids"], stored["metadatas"] or [])
-        if (metadata or {}).get("source", "seed") != "verified" and record_id not in set(ids)
+        if (metadata or {}).get("source", "seed") not in FEEDBACK_SOURCES and record_id not in set(ids)
     )
     if stale_ids:
         collection.delete(ids=stale_ids)

@@ -35,6 +35,18 @@ class TicketNotFoundError(AppError):
     code = "ticket_not_found"
 
 
+class SessionNotFoundError(AppError):
+    status_code = 404
+    code = "session_not_found"
+
+
+class SessionConflictError(AppError):
+    """The feedback does not fit the session's current state (already closed, or a stale/duplicate answer)."""
+
+    status_code = 409
+    code = "session_conflict"
+
+
 class KnowledgeBaseEmptyError(AppError):
     """Vector store has no records, i.e. the seed script has not been run."""
 
