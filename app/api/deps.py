@@ -11,12 +11,13 @@ import logging
 from collections.abc import Iterator
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import RateLimitedError
+from app.core.exceptions import InvalidTechnicianCodeError, RateLimitedError, TechnicianCodeRequiredError
 from app.core.rate_limit import client_key
+from app.core.technician import CodeCheck, check_technician_code
 from app.services.diagnosis_service import DiagnosisService
 from app.services.feedback_service import FeedbackService
 from app.services.knowledge_base_service import KnowledgeBaseService
@@ -69,6 +70,33 @@ def check_rate_limit(request: Request) -> None:
 def enforce_rate_limit(request: Request) -> None:
     """Dependency for the endpoints that spend LLM/vision quota on every call."""
     check_rate_limit(request)
+
+
+def require_technician_code(
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings_dep)],
+    x_technician_code: Annotated[
+        str | None,
+        Header(description="The technician access code. Required only when the server has TECHNICIAN_ACCESS_CODE set."),
+    ] = None,
+) -> None:
+    """Gate for the two technician actions (Verify/Confirm and Correct). Raises 401 unless the code matches.
+
+    With no code configured the gate is off and this does nothing, so those endpoints behave as they always did.
+    The code is never logged: a rejected attempt records only WHY and from which client.
+    """
+    result = check_technician_code(x_technician_code, settings.technician_access_code)
+    if result in (CodeCheck.NOT_REQUIRED, CodeCheck.OK):
+        return
+    logger.warning(
+        "technician_code_rejected",
+        extra={
+            "path": request.url.path,
+            "reason": result.value,
+            "client_key": client_key(request, settings.rate_limit_proxy_hops),
+        },
+    )
+    raise TechnicianCodeRequiredError() if result == CodeCheck.MISSING else InvalidTechnicianCodeError()
 
 
 def get_ticket_service(db: Annotated[Session, Depends(get_db)]) -> TicketService:

@@ -47,6 +47,10 @@ class HealthResponse(BaseModel):
     vector_store: str = Field(description="'ok' or 'error'.")
     llm: str = Field(description="'ok' if Ollama is reachable and the model is pulled, else 'error'.")
     knowledge_base_size: int = Field(description="Number of records in the vector store.")
+    technician_code_required: bool = Field(
+        default=False,
+        description="True when Verify/Confirm/Correct need the technician access code (X-Technician-Code). Never the code itself.",
+    )
 
     model_config = ConfigDict(
         json_schema_extra={

@@ -23,6 +23,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError
 from app.core.logging import request_id_ctx, setup_logging
 from app.core.rate_limit import RateLimiter
+from app.core.technician import log_technician_code_status
 from app.db.seed import seed_if_empty
 from app.db.session import create_db_engine, create_session_factory, init_db
 from app.models.ticket import Ticket
@@ -112,6 +113,7 @@ async def lifespan(app: FastAPI):
     vision_service = create_vision_service(settings)
     app.state.vision_service = vision_service
 
+    log_technician_code_status(settings.technician_access_code)
     logger.info("app_started", extra={"environment": settings.environment})
     yield
     llm_service.close()
@@ -221,7 +223,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "X-Request-ID"],
+        # X-Technician-Code: without it the browser's preflight rejects the Verify/Correct requests when the
+        # frontend (Vercel) and the API (Render) are on different origins. The Vite dev proxy hides this locally.
+        allow_headers=["Content-Type", "X-Request-ID", "X-Technician-Code"],
         expose_headers=["X-Request-ID", "Retry-After"],  # lets the browser app read how long to wait
         max_age=600,
     )

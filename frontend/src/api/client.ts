@@ -19,6 +19,7 @@ import type {
   SessionFeedbackResponse,
   StatsResponse,
 } from '../types/api'
+import { isSendableCode, setTechnicianCodeRequired } from '../lib/technicianCode'
 
 // Empty by default => same origin, which Vite proxies to the backend (see vite.config.ts).
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
@@ -126,10 +127,23 @@ interface RequestOptions {
   signal?: AbortSignal
   /** Non-2xx statuses whose JSON body is still a valid answer (e.g. /health's 503). */
   acceptStatuses?: number[]
+  /** Sent as the X-Technician-Code header (only Verify/Confirm and Correct use it). */
+  technicianCode?: string
 }
 
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', json, form, timeoutMs = DEFAULT_TIMEOUT_MS, signal, acceptStatuses = [] } = opts
+  const { method = 'GET', json, form, timeoutMs = DEFAULT_TIMEOUT_MS, signal, acceptStatuses = [], technicianCode } = opts
+
+  // Built before the timer starts: a code the browser cannot send fails here, cleanly, as "wrong code".
+  const headers: Record<string, string> = {}
+  // For FormData the browser sets the multipart Content-Type (with boundary) itself.
+  if (json !== undefined) headers['Content-Type'] = 'application/json'
+  if (technicianCode) {
+    if (!isSendableCode(technicianCode)) {
+      throw new ApiError('server', 'Invalid technician code.', { status: 401, code: 'invalid_technician_code' })
+    }
+    headers['X-Technician-Code'] = technicianCode
+  }
 
   const controller = new AbortController()
   let timedOut = false
@@ -144,8 +158,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     const response = await fetch(BASE_URL + path, {
       method,
       signal: controller.signal,
-      // For FormData the browser sets the multipart Content-Type (with boundary) itself.
-      headers: json !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
       body: form ?? (json !== undefined ? JSON.stringify(json) : undefined),
     })
 
@@ -225,18 +238,34 @@ export function getHistory(
   return request<HistoryPage>(`/api/v1/history?page=${page}&page_size=${pageSize}${filter}`, { signal })
 }
 
-/** The technician agrees with the AI. Adds the case to the knowledge base. */
-export function confirmTicket(ticketId: number, signal?: AbortSignal): Promise<ReviewResponse> {
-  return request<ReviewResponse>(`/api/v1/tickets/${ticketId}/confirm`, { method: 'POST', signal })
+/**
+ * The technician agrees with the AI (Confirm), or verifies a fix a user already confirmed (Verify). Adds the case
+ * to the knowledge base. A technician action: when the server has a code set it answers 401 without the right one.
+ */
+export function confirmTicket(
+  ticketId: number,
+  signal?: AbortSignal,
+  technicianCode?: string,
+): Promise<ReviewResponse> {
+  return request<ReviewResponse>(`/api/v1/tickets/${ticketId}/confirm`, { method: 'POST', signal, technicianCode })
 }
 
-/** The technician supplies the real root cause and fix. Adds the corrected case to the knowledge base. */
+/**
+ * The technician supplies the real root cause and fix. Adds the corrected case to the knowledge base.
+ * A technician action: when the server has a code set it answers 401 without the right one.
+ */
 export function correctTicket(
   ticketId: number,
   correction: CorrectionInput,
   signal?: AbortSignal,
+  technicianCode?: string,
 ): Promise<ReviewResponse> {
-  return request<ReviewResponse>(`/api/v1/tickets/${ticketId}/correct`, { method: 'POST', json: correction, signal })
+  return request<ReviewResponse>(`/api/v1/tickets/${ticketId}/correct`, {
+    method: 'POST',
+    json: correction,
+    signal,
+    technicianCode,
+  })
 }
 
 /** How many knowledge-base records are seed vs technician-verified. */
@@ -284,7 +313,13 @@ export function sendSessionFeedback(
   })
 }
 
-/** Resolves for both 200 (ok) and 503 (degraded); rejects only if the backend is unreachable. */
+/**
+ * Resolves for both 200 (ok) and 503 (degraded); rejects only if the backend is unreachable.
+ * Also notes whether the server asks for a technician code, so Verify/Correct can ask for it up front.
+ */
 export function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
-  return request<HealthResponse>('/health', { signal, timeoutMs: 6_000, acceptStatuses: [503] })
+  return request<HealthResponse>('/health', { signal, timeoutMs: 6_000, acceptStatuses: [503] }).then((health) => {
+    setTechnicianCodeRequired(health.technician_code_required)
+    return health
+  })
 }

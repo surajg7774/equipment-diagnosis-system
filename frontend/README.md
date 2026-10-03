@@ -64,7 +64,10 @@ Other scripts: `npm run build` (type-check + production build), `npm run lint`.
 * **History** (`/history`): paginated ticket table with a **Review** column: each ticket is *Pending review*
   (medium/high severity marked "Review first"), *Confirmed* or *Corrected*. A technician can **Confirm** a
   correct diagnosis or **Correct** it with the real root cause and fix (an inline form); either adds the case
-  to the knowledge base. Each row also shows its **session**: *In progress* / *Resolved in N attempts* /
+  to the knowledge base. When the backend has a technician access code set, clicking Verify/Confirm/Correct first
+  shows an "Enter technician code" box; a wrong code shows "Invalid technician code." and nothing is saved. The
+  code is held in memory for the tab only (a reload asks again) and is sent as the `X-Technician-Code` header to
+  those two endpoints only. With no code configured nothing is asked. Each row also shows its **session**: *In progress* / *Resolved in N attempts* /
   *Needs a human technician*, and *Show details* lists every attempt with whether it worked, then compares
   the AI's first version with the technician's. A bar at the top
   shows the knowledge base growing (seed vs verified records), and tabs filter by review status. Cases

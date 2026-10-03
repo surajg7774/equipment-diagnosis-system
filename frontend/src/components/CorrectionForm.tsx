@@ -1,9 +1,16 @@
 import { useState, type FormEvent } from 'react'
 import { ApiError, correctTicket } from '../api/client'
 import { EQUIPMENT_TYPES } from '../lib/equipment'
-import { describeError } from '../lib/errors'
+import { describeError, isCodeRejection } from '../lib/errors'
+import {
+  forgetTechnicianCode,
+  getTechnicianCode,
+  mustAskForTechnicianCode,
+  rememberTechnicianCode,
+} from '../lib/technicianCode'
 import type { ReviewResponse } from '../types/api'
 import { SpinnerIcon } from './icons'
+import { TechnicianCodeField } from './TechnicianCodePrompt'
 
 const MIN = 5 // mirrors the backend: 5-2000 characters
 
@@ -24,7 +31,20 @@ export function CorrectionForm({ ticketId, initialRootCause, initialFix, onSaved
   const [submitted, setSubmitted] = useState(false)
   const [busy, setBusy] = useState(false)
   const [serverError, setServerError] = useState<unknown>(null)
+  // The technician code field appears only when the server wants a code we do not have: up front if /health said so,
+  // otherwise after the server refuses the save (the typed text is kept either way).
+  const [codeNeeded, setCodeNeeded] = useState(() => mustAskForTechnicianCode())
+  const [code, setCode] = useState('')
 
+  // "Enter the technician code." only when Save was pressed with the field empty. Right after the server refused a
+  // code the field is empty too, but then the banner already says "Invalid technician code." (no second message).
+  const codeFieldError =
+    (codeNeeded &&
+      submitted &&
+      code.trim().length === 0 &&
+      !isCodeRejection(serverError) &&
+      'Enter the technician code.') ||
+    undefined
   const causeError =
     (submitted && rootCause.trim().length < MIN && `Describe the actual root cause (at least ${MIN} characters).`) ||
     (serverError instanceof ApiError ? serverError.fieldMessage('root_cause') : undefined)
@@ -37,17 +57,34 @@ export function CorrectionForm({ ticketId, initialRootCause, initialFix, onSaved
     event.preventDefault()
     setSubmitted(true)
     if (busy || rootCause.trim().length < MIN || fix.trim().length < MIN) return
+    if (codeNeeded) {
+      if (code.trim().length === 0) {
+        setServerError(null) // drop the old "Invalid technician code." so the field's own message shows instead
+        return
+      }
+      rememberTechnicianCode(code)
+    }
     setBusy(true)
     setServerError(null)
     try {
       onSaved(
-        await correctTicket(ticketId, {
-          root_cause: rootCause.trim(),
-          recommended_fix: fix.trim(),
-          equipment_type: equipmentType.trim() || null,
-        }),
+        await correctTicket(
+          ticketId,
+          {
+            root_cause: rootCause.trim(),
+            recommended_fix: fix.trim(),
+            equipment_type: equipmentType.trim() || null,
+          },
+          undefined,
+          getTechnicianCode() ?? undefined,
+        ),
       )
     } catch (err) {
+      if (isCodeRejection(err)) {
+        // Wrong or missing code: forget it and show the field so it can be retyped. Nothing was saved.
+        forgetTechnicianCode()
+        setCodeNeeded(true)
+      }
       setServerError(err)
     } finally {
       setBusy(false)
@@ -137,6 +174,32 @@ export function CorrectionForm({ ticketId, initialRootCause, initialFix, onSaved
           ))}
         </datalist>
       </div>
+
+      {codeNeeded && (
+        <div>
+          <label
+            htmlFor={`code-${ticketId}`}
+            className="text-xs font-semibold uppercase tracking-wide text-slate-600"
+          >
+            Technician code
+          </label>
+          <div className="mt-1">
+            <TechnicianCodeField
+              id={`code-${ticketId}`}
+              value={code}
+              onChange={setCode}
+              testId="correction-technician-code"
+              disabled={busy}
+              invalid={Boolean(codeFieldError) || isCodeRejection(serverError)}
+            />
+          </div>
+          {codeFieldError && (
+            <p role="alert" className="mt-0.5 text-xs text-red-700" data-testid="correction-technician-code-error">
+              {codeFieldError}
+            </p>
+          )}
+        </div>
+      )}
 
       {showBanner && (
         <p role="alert" className="text-sm text-red-700" data-testid="correction-error">

@@ -51,6 +51,10 @@ services:
       # click stays "provisional". KILL SWITCH: set this to 1 in the dashboard and redeploy to get the old behaviour.
       - key: MIN_CONFIRMATIONS_TO_VERIFY
         value: "2"
+      # TECHNICIAN_ACCESS_CODE (SECRET): set it in the Render dashboard (Environment), NOT here. When set, Verify/Confirm and
+      # Correct need it in an X-Technician-Code header (401 otherwise). Left out, those two endpoints stay open. It is
+      # not listed as a `sync: false` key on purpose: that would make a Blueprint sync prompt for it and block the deploy.
+      # Remove the variable to switch the gate off again. Note: changing a variable restarts the service (free tier: resets data).
       - key: RATE_LIMIT_PER_MINUTE  # per client, on /diagnose, /diagnose-image and each "No" in a session; 0 turns it off
         value: "10"
       # Render's proxy puts the caller's address into X-Forwarded-For. 1 = "trust the last entry".

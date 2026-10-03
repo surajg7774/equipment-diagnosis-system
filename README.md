@@ -247,8 +247,8 @@ diagnosis, which is never overwritten, so the two can be compared (History → *
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/v1/tickets/{id}/confirm` | Confirm the AI was right; adds the AI's diagnosis to the knowledge base. Body optional: `{equipment_type}` |
-| POST | `/api/v1/tickets/{id}/correct` | `{root_cause, recommended_fix, equipment_type?}`; adds the *corrected* case |
+| POST | `/api/v1/tickets/{id}/confirm` | Confirm the AI was right (or **Verify** a user-confirmed fix); adds the AI's diagnosis to the knowledge base. Body optional: `{equipment_type}`. **Needs `X-Technician-Code` when `TECHNICIAN_ACCESS_CODE` is set** (401 otherwise) |
+| POST | `/api/v1/tickets/{id}/correct` | `{root_cause, recommended_fix, equipment_type?}`; adds the *corrected* case. **Needs `X-Technician-Code` when `TECHNICIAN_ACCESS_CODE` is set** (401 otherwise) |
 | POST | `/api/v1/feedback` | `{ticket_id, was_correct}`: thumbs up adds a `provisional_fix` record (verified once a technician reviews it), thumbs down adds a `failed_fix` record (see [above](#thumbs-up-and-thumbs-down-teach-it-too)) |
 | GET | `/api/v1/knowledge-base/stats` | `{total, seed, verified, verified_confirmed, verified_corrected, failed, provisional}`: makes the growth visible |
 | GET | `/api/v1/history?review_status=pending` | Filter by status (`pending` lists high priority first). The History page shows the counts and filters |
@@ -294,6 +294,42 @@ A single click must not be able to teach the knowledge base something it then tr
   512 of 514 pass, and the 2 that do not only pin exact key sets (the exact stats dictionary and the exact list of
   columns the migration adds). `3` demands both a user and a technician. Records written before the safeguard keep their
   verified status.
+
+### Technician access code (protects Verify/Confirm and Correct)
+
+Only two actions can teach the knowledge base what is *verified*, so only those two can be locked:
+`POST /tickets/{id}/confirm` (History's **Confirm** and **Verify** buttons) and `POST /tickets/{id}/correct`
+(**Correct**). Everything else stays open to everyone, exactly as before: diagnosing (text, photo, sessions),
+thumbs up/down, session answers, history, stats and health. A thumbs up still adds a *provisional* record,
+because it reaches the review logic inside the server, not through these two endpoints.
+
+It is a small shared secret, **not a login**: no accounts, no tokens, no expiry.
+
+* Set `TECHNICIAN_ACCESS_CODE` (a secret, like `GROQ_API_KEY`) and those two endpoints require the same value in
+  an `X-Technician-Code` header. Without it, or with a wrong one, they answer **401** and change nothing:
+
+  ```bash
+  curl -X POST http://localhost:8000/api/v1/tickets/1/confirm -H "X-Technician-Code: <your code>"
+  # wrong code -> {"error": {"code": "invalid_technician_code", "message": "Invalid technician code."}}
+  # no code    -> {"error": {"code": "technician_code_required", "message": "A technician access code is required ..."}}
+  ```
+* **Unset or blank = the gate is off** and both endpoints behave as they always did (the default for local runs and
+  tests). That is also the kill switch: remove the variable on Render and redeploy.
+* The check runs before anything else, so a missing/wrong code gets a 401 even for a ticket that does not exist
+  (ids cannot be probed without the code). The code is compared in constant time and is never logged or echoed;
+  a rejected attempt logs only the path, the reason (`missing`/`wrong`) and the client.
+* `GET /health` reports `technician_code_required: true/false` (never the code), so the web app knows whether to
+  ask. On startup the server logs `technician_code_configured` (or a `technician_code_not_configured` warning
+  saying Verify/Correct are open). A code under 12 characters, or with characters a browser cannot send in a
+  header, is logged as `technician_code_weak`.
+* **Web app:** clicking Verify, Confirm or Correct shows a small "Enter technician code" box (masked). A wrong
+  code shows "Invalid technician code." and keeps the box open; the History page never breaks. The code is kept
+  **in memory for that tab only** (never in localStorage, cookies or the URL), so a reload asks again.
+* CORS: `X-Technician-Code` is in the allowed request headers, otherwise the browser's preflight would block these
+  two calls when the frontend (Vercel) and the API (Render) are on different origins.
+
+Pick a long random code (for example four groups of four characters). See the limitations below for what this
+does *not* give you.
 
 ### Thumbs up and thumbs down teach it too
 
@@ -385,8 +421,10 @@ technician's root cause and fix. An unconfirmed ticket was never retrieved.
   fix is still retrieved and still influences the LLM's answers, a technician's single review verifies at once with
   no second check, a technician typing a wrong correction still pollutes the knowledge base, and there is no undo or
   removal yet.
-* **No identity or roles:** anyone who can open the History page can confirm or correct, and the
-  reviewer is not recorded. The same goes for thumbs up/down: `/feedback` has no authentication and no rate
+* **No identity or roles:** Verify/Confirm and Correct can be locked behind one shared
+  [technician access code](#technician-access-code-protects-verifyconfirm-and-correct) (they are open to anyone
+  while it is unset), but there are no accounts, so the reviewer is still not recorded. Thumbs up/down are always
+  open: `/feedback` has no authentication and no rate
   limit of its own, and ticket ids are small integers, so anyone can give a verdict on any ticket. The damage
   is bounded (one verdict and at most one record of each kind per ticket, and tickets only come from the
   rate-limited diagnose endpoints) but a single anonymous thumbs-down does steer later similar diagnoses.
@@ -578,7 +616,7 @@ The web app turns that into "Too many requests, please wait a moment (about 42 s
 | POST | `/api/v1/diagnose-image` | AI visual assessment of an equipment photo by a vision-language model (see [Image analysis](#image-analysis)) |
 | GET | `/api/v1/history` | Paginated past tickets, newest first (`page`, `page_size`) |
 | POST | `/api/v1/feedback` | `{ticket_id, was_correct}`: thumbs up records a confirmed fix as `provisional_fix` (verified once a technician reviews it), thumbs down records a fix that did not work (`failed_fix`) in the knowledge base |
-| POST | `/api/v1/tickets/{id}/confirm`, `/correct` | Technician review: adds the case to the knowledge base (see [Feedback loop](#feedback-loop-technicians-improve-the-knowledge-base)) |
+| POST | `/api/v1/tickets/{id}/confirm`, `/correct` | Technician review: adds the case to the knowledge base (see [Feedback loop](#feedback-loop-technicians-improve-the-knowledge-base)). The only two routes behind the optional [technician code](#technician-access-code-protects-verifyconfirm-and-correct) (`X-Technician-Code`) |
 | GET | `/api/v1/knowledge-base/stats` | Seed vs verified (working) vs failed record counts |
 | GET | `/api/v1/stats` | Usage and knowledge-base growth: totals, similar-case vs general-reasoning split, average confidences (see [Statistics](#statistics)) |
 | GET | `/health` | Database, vector store and LLM status (503 if any is down) |
@@ -617,6 +655,7 @@ All settings are environment variables (or `.env`); see [.env.example](.env.exam
 | `RATE_LIMIT_PROXY_HOPS` | `0` | Trusted proxies in front of the app (0 = use the connection address; `render.yaml` sets 1) |
 | `MAX_SOLUTION_ATTEMPTS` | `4` | Different solutions offered per problem before the user is told to escalate to a human |
 | `MIN_CONFIRMATIONS_TO_VERIFY` | `2` | Confirmations a fix needs to count as *verified* (a user's click = 1, a technician's review = 2). `1` = any confirmation verifies at once (the behaviour before the safeguard: the kill switch); `3` = needs a user AND a technician |
+| `TECHNICIAN_ACCESS_CODE` | *(unset)* | Secret. When set, Verify/Confirm and Correct need it in the `X-Technician-Code` header (401 otherwise); unset or blank = those two endpoints stay open. See [Technician access code](#technician-access-code-protects-verifyconfirm-and-correct) |
 | `AUTO_SEED_ON_STARTUP` | `true` | Rebuild the knowledge base at boot if it is empty (ephemeral hosts) |
 | `EMBEDDING_BACKEND` | `onnx` | `onnx` (about 210 MB RAM) or `sentence-transformers` (PyTorch, about 750 MB; extra install) |
 | `LOW_CONFIDENCE_THRESHOLD` | `0.50` | Minimum similarity for a "close match" |
@@ -663,11 +702,17 @@ check real retrieval and that the similarity threshold still separates known fro
 * **Thumbs-down only covers the first attempt.** The thumbs rate the ticket's own diagnosis, so the web app
   shows them on attempt 1 only, and a session's "No" does not record a failed fix: failures of attempts 2 and
   later are never learned. See [Iterative diagnosis](#iterative-diagnosis-try-a-solution-give-feedback-get-the-next-one).
-* **The feedback endpoint is unauthenticated and not rate limited.** `POST /api/v1/feedback` (like
-  confirm/correct) has no login and no limit of its own, and ticket ids are small integers, so anyone can
+* **The feedback endpoint is unauthenticated and not rate limited.** `POST /api/v1/feedback`
+  has no login and no limit of its own, and ticket ids are small integers, so anyone can
   give a verdict on any ticket. The damage is bounded (one verdict and at most one record of each kind per
   ticket, and tickets only come from the rate-limited diagnose endpoints), but one anonymous thumbs-down
   does steer later similar diagnoses.
+* **The technician code is one shared secret, not an identity.** Anyone who has it can verify or correct, nothing
+  records who did, there is no expiry, and it cannot be revoked per person (change it for everyone). Wrong guesses
+  are **not rate limited**, on purpose: a limiter keyed on a client address the server cannot yet identify reliably
+  would let a stranger lock the technicians out, so the protection is the code's length (use 12+ random
+  characters). It travels in a request header (use HTTPS, which Render and Vercel provide) and the web app keeps it
+  in memory only. On Render's free tier, changing the variable restarts the service and resets the ephemeral data.
 * **A wrong "yes" still teaches the knowledge base, but only provisionally.** A thumbs-up (with no confidence
   check) or a session "Yes" (which needs the solution to be grounded in similar cases or the model to have been at
   least 60% sure) now records a *provisional* fix: labelled, ranked lower and told to the LLM as unverified, but
@@ -779,6 +824,7 @@ Environment variables:
 | `VISION_PROVIDER` / `GROQ_VISION_MODEL` | `groq` / `qwen/qwen3.8-27b` | Optional (defaults). Photo analysis reuses `GROQ_API_KEY` |
 | `EMBEDDING_BACKEND` | `onnx` | Optional (default); this is what makes it fit in 512 MB |
 | `AUTO_SEED_ON_STARTUP` | `true` | Optional (default) |
+| `TECHNICIAN_ACCESS_CODE` | *(a secret you choose)* | Recommended. Protects Verify/Confirm and Correct (see [Technician access code](#technician-access-code-protects-verifyconfirm-and-correct)). Leave it out and those two stay open. Set it in the dashboard only; it is deliberately not in `render.yaml` |
 | `RATE_LIMIT_PER_MINUTE` | `10` | Optional (default). Per client, on the two AI endpoints |
 | `RATE_LIMIT_PROXY_HOPS` | `1` | **Set this on Render** (the default 0 would make every visitor share one allowance, because all connections come from Render's proxy). See [Rate limiting](#rate-limiting) |
 | `DATABASE_URL` | `sqlite:///./servicediagnose.db` | Optional (default); ephemeral on the free tier |

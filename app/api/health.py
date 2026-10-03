@@ -67,6 +67,7 @@ def health(request: Request, db: DbDep, diagnosis_service: DiagnosisServiceDep):
         vector_store="ok" if vector_ok else "error",
         llm="ok" if llm_ok else "error",
         knowledge_base_size=kb_size,
+        technician_code_required=request.app.state.settings.technician_access_code is not None,
     )
     status_code = 200 if body.status == "ok" else 503
     return JSONResponse(status_code=status_code, content=body.model_dump())

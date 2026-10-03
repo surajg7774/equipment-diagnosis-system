@@ -310,6 +310,8 @@ export interface HealthResponse {
   vector_store: 'ok' | 'error'
   llm: 'ok' | 'error'
   knowledge_base_size: number
+  /** True when Verify/Confirm/Correct need the technician access code. Absent on older backends. */
+  technician_code_required?: boolean
 }
 
 // --- Error envelope (every non-2xx response from the backend) -------------------------------

@@ -7,6 +7,15 @@ export interface ErrorView {
   requestId?: string
 }
 
+/** The server refused a technician action because the access code was missing or wrong (HTTP 401). */
+export function isCodeRejection(error: unknown): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    error.status === 401 &&
+    (error.code === 'technician_code_required' || error.code === 'invalid_technician_code')
+  )
+}
+
 /** Turns any thrown value into text a technician can act on (never a raw dump). */
 export function describeError(error: unknown): ErrorView {
   if (!(error instanceof ApiError)) {
@@ -45,6 +54,13 @@ export function describeError(error: unknown): ErrorView {
             : 'Too many requests, please wait a moment and try again.',
           retryable: true,
         }
+      }
+      // The technician access code (Verify/Confirm and Correct only).
+      if (error.code === 'technician_code_required') {
+        return { title: 'Technician code needed', message: 'Enter the technician code to continue.', retryable: false }
+      }
+      if (error.code === 'invalid_technician_code') {
+        return { title: 'Invalid technician code', message: 'Invalid technician code.', retryable: false }
       }
       // Session answers: the session can be gone (the server restarted and wiped its data) or the
       // answer can be about a solution that is no longer the current one.

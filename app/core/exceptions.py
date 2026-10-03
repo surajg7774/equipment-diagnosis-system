@@ -35,6 +35,26 @@ class TicketNotFoundError(AppError):
     code = "ticket_not_found"
 
 
+class TechnicianCodeRequiredError(AppError):
+    """Verify/Confirm/Correct need the technician access code and the request carried none."""
+
+    status_code = 401
+    code = "technician_code_required"
+
+    def __init__(self) -> None:
+        super().__init__("A technician access code is required for this action. Send it in the X-Technician-Code header.")
+
+
+class InvalidTechnicianCodeError(AppError):
+    """The technician access code did not match."""
+
+    status_code = 401
+    code = "invalid_technician_code"
+
+    def __init__(self) -> None:
+        super().__init__("Invalid technician code.")
+
+
 class SessionNotFoundError(AppError):
     status_code = 404
     code = "session_not_found"

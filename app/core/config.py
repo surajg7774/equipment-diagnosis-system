@@ -138,10 +138,25 @@ class Settings(BaseSettings):
     # verifies at once): the kill switch if the safeguard ever gets in the way. 3 = needs a user AND a technician.
     min_confirmations_to_verify: int = Field(default=2, ge=1, le=3)
 
+    # --- Technician access code: a small gate on Verify/Confirm and Correct (see app/core/technician.py) ---
+    # Secret: set it in the hosting dashboard / .env, never in code. Unset or blank = the gate is off and those two
+    # endpoints stay open, as before (also the kill switch). SecretStr keeps it out of reprs and logs.
+    technician_access_code: SecretStr | None = None
+
     @property
     def cors_origins(self) -> list[str]:
         """ALLOWED_ORIGINS as a clean list ("*" allowed; trailing slashes removed)."""
         return [o.strip().rstrip("/") for o in self.allowed_origins.split(",") if o.strip()]
+
+    @field_validator("technician_access_code", mode="before")
+    @classmethod
+    def _blank_technician_code_means_off(cls, value: object) -> object:
+        """An empty variable (TECHNICIAN_ACCESS_CODE=) means "not configured", and stray spaces are not part of the code."""
+        if isinstance(value, SecretStr):
+            value = value.get_secret_value()
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
 
     @field_validator("groq_reasoning_effort")
     @classmethod
