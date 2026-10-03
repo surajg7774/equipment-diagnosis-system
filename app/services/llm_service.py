@@ -182,7 +182,20 @@ SYSTEM_PROMPT = (
     "You diagnose faults in ANY physical device, machine or piece of equipment: industrial machinery "
     "(pumps, motors, conveyors, generators, HVAC), office and consumer electronics (printers, "
     "computers, mobile phones, TVs), appliances, vehicles, tools and anything similar. Be specific "
-    "and practical, put safety first, and never invent details the user did not give you."
+    "and practical, put safety first, and never invent details the user did not give you.\n\n"
+    # LANGUAGE: the answer follows the user's language, with no translation step in our code. The model does it,
+    # so this one paragraph is the whole feature. The last two sentences are what keep the rest of the system
+    # working: our reference cases are English (the model must not drift to English because of them) and the
+    # parser only accepts the English JSON field names and severity values.
+    "LANGUAGE: Detect the language/style the user wrote their query in (English, Hindi, Hinglish, or any "
+    "other language), and write your diagnosis response in that same language/style. A query in English gets "
+    "an English answer. Match the user's script as well as their language: Hindi written in Devanagari gets "
+    "Hindi in Devanagari, while Hindi written in Roman letters (Hinglish, usually mixed with English words) "
+    "gets Hinglish in Roman letters, never Devanagari. Keep technical terms like part names in their common "
+    "form if needed. The language is decided by the user's own report alone, never by the language of any "
+    "reference cases, photo findings or earlier attempts you are shown. Only the free text you write changes "
+    'language: every JSON field name, and the values of "severity", "is_valid_issue" and "confidence", stay '
+    "exactly as specified (English words and digits)."
 )
 
 _OUTPUT_INSTRUCTIONS = """\
@@ -191,7 +204,8 @@ Respond with a JSON object with exactly these fields:
 - "recommended_fix": concrete next steps for the technician, in order, including any safety precaution (1-4 sentences).
 - "severity": "high" if there is a safety risk or serious damage/outage is likely, "medium" if the equipment is degraded or failing and needs prompt repair, otherwise "low".
 - "is_valid_issue": true if the report describes a fault, malfunction, damage or failure of a physical device, machine or piece of equipment of ANY kind (it does not have to be a type you have seen before: a phone that will not turn on, a fridge that is warm, a car that will not start and a forklift that leaks are all valid). false only if the report is clearly NOT about a malfunctioning physical device: a general-knowledge or trivia question, chit-chat, a request for advice or opinions, or nonsense. If false: use "root_cause" to say briefly why it is not an equipment issue, use "recommended_fix" to ask the user to describe the device problem, and set "severity" to "low".
-- "confidence": an integer from 0 to 100 (digits only, for example 70, never words): how certain you are that your root_cause and recommended_fix are correct, given only the information in the report. Judge your own certainty. Do NOT base it on whether similar past cases were provided. A clear, specific report of a well-known fault deserves a high value; a vague, ambiguous or unusual report deserves a lower one. Avoid defaulting to the same number every time."""
+- "confidence": an integer from 0 to 100 (digits only, for example 70, never words): how certain you are that your root_cause and recommended_fix are correct, given only the information in the report. Judge your own certainty. Do NOT base it on whether similar past cases were provided. A clear, specific report of a well-known fault deserves a high value; a vague, ambiguous or unusual report deserves a lower one. Avoid defaulting to the same number every time.
+Write the text of "root_cause" and "recommended_fix" in the same language and script as the report inside <issue> (English gets English, Devanagari gets Devanagari, Roman-letter Hinglish gets Hinglish), whatever language the reference cases are in. The field names and the "severity" value stay in English."""
 
 
 def _is_provisional(case: SimilarCase) -> bool:
