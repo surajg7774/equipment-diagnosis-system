@@ -29,6 +29,7 @@ See [Deployment](#deployment-render--vercel) for hosting on Render + Vercel.
         |      close failed fixes are always given, in their own section labelled "did NOT work"
         v
  3 GENERATE   the LLM (Ollama or Groq) writes a NEW root cause + fix + severity for THIS issue
+        |      (if a photo was attached, a vision model's findings go into this same call)
         |
         v
  response:  diagnosis, recommended_action ......... written by the LLM
@@ -39,6 +40,7 @@ See [Deployment](#deployment-render--vercel) for hosting on Render + Vercel.
             diagnosis_basis / note ................ says whether it was grounded in a past case
             is_valid_issue ........................ false if the input is not a device/equipment problem
             session_id, attempt_number ............ the diagnosis session this solution belongs to
+            input_sources, image_analysis ......... ["text"] or ["text","image"]: what it was based on, and what the photo showed
 ```
 
 **Any physical device is in scope, not just the knowledge base's categories.** The knowledge base is
@@ -417,6 +419,54 @@ and it read the text in the picture; a bird on a rusty pipe -> *not equipment*, 
   are not allowed to share.
 * The UI labels it *AI-generated visual assessment, not a substitute for professional inspection*.
 
+### Attach a photo to a text diagnosis (one combined diagnosis)
+
+A description and a photo can be sent together as **one request**, and they produce **one diagnosis**, not two
+disconnected results. `POST /api/v1/diagnose` still takes plain JSON exactly as before; sent as
+`multipart/form-data` it also accepts an optional `image`:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/diagnose \
+  -F "description=Water pressure keeps dropping and there are wet patches around the pipe joints" \
+  -F "equipment_type=pump" \
+  -F "image=@tests/fixtures/images/rusted_pipes.jpg"
+```
+
+```
+description ──► retrieval (ChromaDB, on the description alone) ──┐
+photo ──► vision model ──► findings (damage, severity, what it sees) ──┴─► ONE LLM call ──► one diagnosis
+```
+
+* **What reaches the LLM.** The vision model's findings go into the *same* prompt as the description, in a
+  fenced `<photo_findings>` block (visible damage yes/no, the vision model's severity rating and confidence,
+  and what it sees), with an instruction to base the diagnosis on both and to say so if they disagree. Tests
+  read the actual HTTP body sent to the LLM, and also check the uploaded bytes reaching the vision model.
+  In a live run the same description gave a generic joint leak rated *medium* on its own, and with a photo of
+  corroded pipes a corrosion diagnosis rated *high*.
+* **The response says what it used:** `input_sources` is `["text"]` or `["text", "image"]`, and `image_analysis`
+  holds what the vision model saw. The web app shows "Diagnosis based on your description and the photo you
+  attached" with those findings and the same *not a substitute for professional inspection* caveat.
+* **Text only is unchanged.** A JSON request, or a multipart one without a photo, makes exactly the same LLM
+  call as before. I replayed 20 recorded requests (valid, malformed, wrong content types) against the old and
+  new code and every answer was identical apart from three new, additive fields on successful responses.
+  **Photo only** still goes through `POST /api/v1/diagnose-image`, which is untouched; this endpoint requires a
+  description (a photo without one is a 422 and nothing is analysed).
+* **A photo that cannot be used never costs the diagnosis.** If the photo is not equipment, or image analysis is
+  switched off, rate limited, down or returns something unusable, the diagnosis goes ahead on the description and
+  the response carries `image_note` ("Your photo was not used: ...") with `input_sources: ["text"]`, so it is never
+  presented as if the photo counted. A photo that is not a JPEG/PNG/WebP, is empty or is over 5 MB is refused up
+  front (415 / 422 / 413) before any model runs, and an invalid description is rejected before the photo is analysed.
+* **Retries keep the photo.** The findings are stored with the diagnosis session (the photo itself never is), so
+  "No, try something else" weighs the same photo on every later attempt.
+* **Rate limiting is unchanged.** The combined request goes through the same shared allowance as the other AI
+  endpoints and counts as **one** request, although it makes two model calls (vision, then the LLM), which on the
+  Groq free tier is roughly 3.5k tokens, so a few combined requests a minute are the practical ceiling there.
+* **Limitations.** Retrieval searches on the description only, so a photo does not change which past cases are
+  found. The LLM is told to trust the photo as showing the reported problem; if the photo is of something else
+  (the live example above used a stock photo of stored pipes, not the pipes in the described line) it may still
+  blend them. Verified and failed-fix records learned from a combined diagnosis are keyed on the description alone
+  but may mention the photo in their root cause. History does not yet mark which tickets had a photo.
+
 ## Rate limiting
 
 `/api/v1/diagnose` and `/api/v1/diagnose-image` are limited to **10 requests per minute per client**
@@ -484,7 +534,7 @@ The web app turns that into "Too many requests, please wait a moment (about 42 s
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/v1/diagnose` | RAG diagnosis from a text description (any device). Stored as a ticket and starts a session; optional `equipment_type` |
+| POST | `/api/v1/diagnose` | RAG diagnosis from a text description (any device). Stored as a ticket and starts a session; optional `equipment_type`. JSON as before, or `multipart/form-data` with an optional `image` for ONE diagnosis from description + photo (see [Attach a photo](#attach-a-photo-to-a-text-diagnosis-one-combined-diagnosis)) |
 | POST | `/api/v1/sessions/{id}/feedback` | `{was_helpful, attempt_number?}`: yes resolves the session, no returns a different solution, the cap returns an escalation (see [Iterative diagnosis](#iterative-diagnosis-try-a-solution-give-feedback-get-the-next-one)) |
 | POST | `/api/v1/diagnose-image` | AI visual assessment of an equipment photo by a vision-language model (see [Image analysis](#image-analysis)) |
 | GET | `/api/v1/history` | Paginated past tickets, newest first (`page`, `page_size`) |
@@ -559,6 +609,30 @@ arithmetic and endpoint, and the API through FastAPI's `TestClient`. The integra
 check real retrieval and that the similarity threshold still separates known from unknown issues.
 
 ## Design notes and limitations
+
+**Known limitations of the learning features, in brief** (details in the linked sections):
+
+* **Avoiding a failed fix is a hint, not a guarantee.** With the real model (3 runs per arm), a later
+  similar answer had mean similarity 0.91 to the failed solution without the failed-fix context and 0.76
+  with it, but in one of the three runs it still returned to the same cause. The repeat check (similarity
+  >= 0.90) is weak by design: embeddings cannot tell a reworded cause from a different one (different causes
+  scored up to 0.82, paraphrases as low as 0.74), so it only catches near-verbatim copies. See
+  [Thumbs up and thumbs down](#thumbs-up-and-thumbs-down-teach-it-too).
+* **Thumbs-down only covers the first attempt.** The thumbs rate the ticket's own diagnosis, so the web app
+  shows them on attempt 1 only, and a session's "No" does not record a failed fix: failures of attempts 2 and
+  later are never learned. See [Iterative diagnosis](#iterative-diagnosis-try-a-solution-give-feedback-get-the-next-one).
+* **The feedback endpoint is unauthenticated and not rate limited.** `POST /api/v1/feedback` (like
+  confirm/correct) has no login and no limit of its own, and ticket ids are small integers, so anyone can
+  give a verdict on any ticket. The damage is bounded (one verdict and at most one record of each kind per
+  ticket, and tickets only come from the rate-limited diagnose endpoints), but one anonymous thumbs-down
+  does steer later similar diagnoses.
+* **A wrong "yes" teaches the knowledge base.** A thumbs-up (or a technician's Confirm) writes a
+  `verified_fix` record at once, with no confidence check on a thumbs-up; a session "Yes" only needs the
+  solution to be grounded in similar cases or the model to have been at least 60% sure. That record then
+  influences retrieval and the LLM's later answers, and there is no second confirmation, no recorded reviewer
+  and no way to retract it yet. See [Feedback loop](#feedback-loop-technicians-improve-the-knowledge-base).
+
+**Other design notes**
 
 * **Two confidences, deliberately separate** (see above). `retrieval_confidence` is how well the
   knowledge base covers the issue; `llm_confidence` is the model's own certainty. Neither is a

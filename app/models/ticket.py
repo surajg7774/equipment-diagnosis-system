@@ -121,6 +121,9 @@ class DiagnosisSession(Base):
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_utcnow, index=True)
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # What a vision model saw in the photo attached to the original request (an ImageFindings as JSON), or
+    # null for a text-only session. Kept so every later attempt weighs the same photo; the photo is not stored.
+    image_findings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     ticket: Mapped[Ticket | None] = relationship(back_populates="diagnosis_session")
     attempts: Mapped[list["SolutionAttempt"]] = relationship(

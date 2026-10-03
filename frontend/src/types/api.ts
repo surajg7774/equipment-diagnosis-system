@@ -39,6 +39,18 @@ export interface SimilarCase {
   outcome?: KnowledgeOutcome | null
 }
 
+/** What a vision model saw in a photo that was attached to a diagnosis. */
+export interface ImageFindings {
+  description: string
+  damage_detected: boolean
+  /** The vision model's own rating of the visible condition. */
+  severity: Severity
+  /** 0-1, the model's self-reported certainty; null if it gave no usable number. */
+  confidence: number | null
+  model_name: string
+  provider: string
+}
+
 // --- POST /api/v1/diagnose ----------------------------------------------------
 export interface DiagnoseRequest {
   /** 10-2000 characters after trimming. */
@@ -79,6 +91,12 @@ export interface DiagnoseResponse {
   attempt_number?: number | null
   /** How many different solutions are offered before the user is told to escalate. */
   max_attempts?: number | null
+  /** What the diagnosis was based on: ['text'], or ['text', 'image'] when a photo's findings were used too. */
+  input_sources?: ('text' | 'image')[]
+  /** What the vision model saw in the attached photo; set when input_sources includes 'image'. */
+  image_analysis?: ImageFindings | null
+  /** Set when a photo was attached but NOT used (not equipment, or image analysis unavailable). */
+  image_note?: string | null
 }
 
 // --- POST /api/v1/sessions/{id}/feedback ---------------------------------------------------

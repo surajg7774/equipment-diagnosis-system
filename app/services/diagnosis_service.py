@@ -36,6 +36,7 @@ from typing import Any
 from chromadb.api.models.Collection import Collection
 
 from app.core.exceptions import KnowledgeBaseEmptyError
+from app.schemas.diagnosis import ImageFindings
 from app.schemas.enums import DiagnosisBasis, KnowledgeOutcome, Severity
 from app.schemas.knowledge_base import SimilarCase
 from app.services.embedding_service import Embedder
@@ -83,6 +84,8 @@ class DiagnosisResult:
     note: str | None
     # Close past cases whose fix a user reported did NOT work; shown to the LLM as "did NOT work".
     failed_cases: list[SimilarCase] = field(default_factory=list)
+    # What a vision model saw in a photo attached to this request, if one was used (None = text only).
+    image_findings: ImageFindings | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +187,19 @@ class DiagnosisService:
         vectors = self._embedder.embed(texts)
         return max(cosine_similarity(vectors[0], v) for v in vectors[1:]) >= REPEAT_SIMILARITY
 
-    def diagnose(self, description: str, previous_attempts: Sequence[PreviousAttempt] = ()) -> DiagnosisResult:
-        """Diagnose ``description``; with ``previous_attempts`` propose something DIFFERENT from them."""
+    def diagnose(
+        self,
+        description: str,
+        previous_attempts: Sequence[PreviousAttempt] = (),
+        image_findings: ImageFindings | None = None,
+    ) -> DiagnosisResult:
+        """Diagnose ``description``; with ``previous_attempts`` propose something DIFFERENT from them.
+
+        With ``image_findings`` (what a vision model saw in an attached photo) the SAME LLM call weighs the
+        description and the photo together, so the answer is one diagnosis, not two. Retrieval still searches
+        on the description alone: ``retrieval_confidence`` keeps meaning "how well past cases cover the
+        reported symptoms".
+        """
         started = time.perf_counter()
 
         # 1. RETRIEVE (one embedding, two searches: fixes that worked, and fixes that did not)
@@ -211,7 +225,10 @@ class DiagnosisService:
         # 3. GENERATE. Errors (LLMUnavailableError / LLMResponseError) propagate
         # on purpose: we never fall back to presenting a raw lookup as a diagnosis.
         context = cases if grounded else []
-        llm_result = self._llm.generate_diagnosis(description, context, previous_attempts, failed_cases)
+        # Only passed when there IS a photo, so a text-only call is exactly what it was before photos
+        # existed (and an LLMService written back then keeps working).
+        photo = {} if image_findings is None else {"image_findings": image_findings}
+        llm_result = self._llm.generate_diagnosis(description, context, previous_attempts, failed_cases, **photo)
         # Everything known NOT to work for this problem: earlier attempts in this session, and close
         # failed fixes from the knowledge base.
         ruled_out = [(a.root_cause, a.recommended_fix) for a in previous_attempts]
@@ -228,7 +245,9 @@ class DiagnosisService:
                 root_cause=llm_result.root_cause,
                 recommended_fix=llm_result.recommended_fix,
             )
-            llm_result = self._llm.generate_diagnosis(description, context, [*previous_attempts, repeat], failed_cases)
+            llm_result = self._llm.generate_diagnosis(
+                description, context, [*previous_attempts, repeat], failed_cases, **photo
+            )
             repeated = self._repeats_a_ruled_out_solution(llm_result, ruled_out)
         llm_done = time.perf_counter()
 
@@ -265,6 +284,7 @@ class DiagnosisService:
                 "diagnosis_basis": basis.value,
                 "previous_attempts": len(previous_attempts),
                 "failed_cases": len(failed_cases),
+                "photo_findings": image_findings is not None,
                 "repeated_ruled_out_solution": repeated,
                 "retrieval_ms": round((retrieval_done - started) * 1000, 1),
                 "llm_ms": round((llm_done - retrieval_done) * 1000, 1),
@@ -290,4 +310,5 @@ class DiagnosisService:
             diagnosis_basis=basis,
             note=note,
             failed_cases=failed_cases if is_valid else [],
+            image_findings=image_findings,
         )

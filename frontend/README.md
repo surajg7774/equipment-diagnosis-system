@@ -33,6 +33,16 @@ Other scripts: `npm run build` (type-check + production build), `npm run lint`.
     reasoning*; similar cases are listed below.
   * **Not an equipment issue** (`is_valid_issue: false`): a neutral message with the assistant's
     reply and a "No ticket created" notice. No severity, ticket id or confidence is rendered.
+* **Attach a photo (optional)** (Diagnose page, on the main form): next to the description, with a
+  thumbnail, file name, size and a Remove button (JPEG/PNG/WebP up to 5 MB, checked in the browser before
+  sending). With a photo the request goes out as `multipart/form-data` and the AI weighs the photo together with
+  the description in ONE diagnosis; without one it is the same JSON request as always. The result card then says
+  **"Diagnosis based on your description and the photo you attached"** and keeps **what the AI sees in your
+  photo** (findings, a damage chip, the vision model's own severity and confidence, and the *not a substitute for
+  professional inspection* caveat) as part of the explanation, and later attempts after "No, try something else"
+  keep showing it. If the photo could not be used (not equipment, or image analysis unavailable) an amber notice
+  says so and the diagnosis is based on the description alone. "Try again" re-sends the same photo. The standalone
+  **Diagnose from a photo** card below the form is unchanged, for people who only have a photo.
 * **Thumbs up / down** (Diagnose page, on the first diagnosis): *Was this diagnosis correct?* Each verdict
   now teaches the knowledge base and the UI says how: a thumbs up records a **confirmed working fix**, a
   thumbs down records **an approach that did not work**, so similar future problems avoid it. When a past
@@ -68,7 +78,7 @@ src/
   api/client.ts      typed fetch wrapper; every failure becomes an ApiError (network/timeout/validation/server)
   types/api.ts       TypeScript mirror of the backend contracts
   pages/             DiagnosePage, HistoryPage, StatsPage
-  components/        ResultCard, SessionFlow, SessionBadge, BasisBanner, SeverityBadge, ConfidenceBar, ...
+  components/        ResultCard, SessionFlow, SessionBadge, PhotoAttachment, PhotoFindings, BasisBanner, ...
   lib/               error-to-message mapping, formatting helpers
 ```
 

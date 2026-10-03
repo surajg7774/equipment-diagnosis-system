@@ -3,9 +3,12 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, File, UploadFile
-
-from fastapi import Depends
+from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
+from pydantic import ValidationError
+from starlette.datastructures import Headers
+from starlette.routing import Match
 
 from app.api.deps import (
     DiagnosisServiceDep,
@@ -17,11 +20,142 @@ from app.api.deps import (
 )
 from app.schemas.common import ErrorResponse
 from app.schemas.diagnosis import DiagnoseRequest, DiagnoseResponse, ImageDiagnoseResponse
-from app.services.session_service import diagnose_response_for
-from app.services.vision_service import MEDIA_TYPES, validate_image_bytes
+from app.services.diagnosis_service import DiagnosisResult
+from app.services.session_service import SessionService, diagnose_response_for
+from app.services.vision_service import MEDIA_TYPES, describe_photo_for_diagnosis, validate_image_bytes
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Diagnosis"])
+
+
+class MultipartOnlyRoute(APIRoute):
+    """A route that only matches ``multipart/form-data`` requests.
+
+    It lets ONE URL (POST /diagnose) serve two kinds of request without touching the existing one: this
+    route, registered first, takes the multipart upload (description + optional photo); every other request
+    falls through to the plain JSON route, which is exactly the route that existed before photos.
+    """
+
+    def matches(self, scope):
+        match, child_scope = super().matches(scope)
+        if match != Match.NONE and not Headers(scope=scope).get("content-type", "").lower().startswith("multipart/form-data"):
+            return Match.NONE, {}
+        return match, child_scope
+
+
+def _respond(
+    result: DiagnosisResult, payload: DiagnoseRequest, sessions: SessionService, image_note: str | None = None
+) -> DiagnoseResponse:
+    """Store a valid diagnosis (ticket + session) and shape the response; shared by both /diagnose routes."""
+    # Input that is not an equipment problem is answered but never stored (no ticket, no session),
+    # so it cannot pollute the history.
+    if not result.is_valid_issue:
+        return diagnose_response_for(
+            result, ticket_id=None, session_id=None, attempt_number=None, max_attempts=None, image_note=image_note
+        )
+
+    ticket, session, attempt = sessions.start(
+        description=payload.description, equipment_type=payload.equipment_type, result=result
+    )
+    return diagnose_response_for(
+        result,
+        ticket_id=ticket.id,
+        session_id=session.session_id,
+        attempt_number=attempt.attempt_number,
+        max_attempts=sessions.max_attempts,
+        image_note=image_note,
+    )
+
+
+def _validated_form(description: str | None, equipment_type: str | None) -> DiagnoseRequest:
+    """Validate the multipart text fields with the SAME model as the JSON body, and fail the same way (422)."""
+    fields = {"description": description, "equipment_type": equipment_type}
+    try:
+        # A field that was not sent is omitted (not None), so a missing description says "Field required".
+        return DiagnoseRequest.model_validate({k: v for k, v in fields.items() if v is not None})
+    except ValidationError as exc:
+        # Same shape FastAPI builds for a JSON body: loc is ("body", <field>), which the shared handler formats.
+        raise RequestValidationError([{**err, "loc": ("body", *err["loc"])} for err in exc.errors(include_url=False)]) from exc
+
+
+# Documents the multipart variant on the JSON route's Swagger entry (the multipart route itself is hidden,
+# because two operations cannot share one path + method in an OpenAPI document).
+_MULTIPART_DOCS = {
+    "requestBody": {
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "required": ["description"],
+                    "properties": {
+                        "description": {
+                            "type": "string",
+                            "minLength": 10,
+                            "maxLength": 2000,
+                            "description": "Free-text description of the problem (10-2000 characters).",
+                        },
+                        "equipment_type": {"type": "string", "maxLength": 64, "description": "Optional kind of equipment."},
+                        "image": {
+                            "type": "string",
+                            "format": "binary",
+                            "description": "Optional photo (JPEG, PNG or WebP, up to 5 MB). A vision model describes it and the "
+                            "findings go into the same LLM call as the description.",
+                        },
+                    },
+                }
+            }
+        }
+    }
+}
+
+
+def diagnose_with_photo(
+    diagnosis_service: DiagnosisServiceDep,
+    sessions: SessionServiceDep,
+    vision_service: VisionServiceDep,
+    settings: SettingsDep,
+    description: Annotated[str | None, Form(description="Description of the problem (10-2000 characters).")] = None,
+    equipment_type: Annotated[str | None, Form(description="Optional kind of equipment.")] = None,
+    image: Annotated[UploadFile | None, File(description="Optional photo of the equipment (JPEG, PNG or WebP).")] = None,
+) -> DiagnoseResponse:
+    """The multipart variant of POST /diagnose: a description plus an optional photo, as ONE diagnosis."""
+    payload = _validated_form(description, equipment_type)
+
+    findings, image_note = None, None
+    if image is not None:
+        # Read at most limit+1 bytes: enough to detect "too big" without loading a huge upload.
+        data = image.file.read(settings.max_image_size_bytes + 1)
+        # A browser form whose file box was left empty still sends an (empty, nameless) file part: no photo.
+        if data or image.filename:
+            media_type = MEDIA_TYPES[validate_image_bytes(data, settings.max_image_size_bytes)]  # 415 / 413 / 422
+            findings, image_note = describe_photo_for_diagnosis(vision_service, data, media_type)
+            logger.info(
+                "photo_attached_to_diagnosis",
+                extra={"image_bytes": len(data), "photo_used": findings is not None},  # never the image itself
+            )
+
+    # The photo's findings are passed only when there are some, so a text-only request makes exactly the
+    # same call as the JSON route.
+    photo = {"image_findings": findings} if findings is not None else {}
+    result = diagnosis_service.diagnose(payload.description, **photo)
+    return _respond(result, payload, sessions, image_note)
+
+
+router.add_api_route(
+    "/diagnose",
+    diagnose_with_photo,
+    methods=["POST"],
+    route_class_override=MultipartOnlyRoute,
+    dependencies=[Depends(enforce_rate_limit)],  # the same shared allowance as every other AI endpoint
+    response_model=DiagnoseResponse,
+    include_in_schema=False,
+    responses={
+        413: {"model": ErrorResponse, "description": "Image too large."},
+        415: {"model": ErrorResponse, "description": "Not a JPEG/PNG/WebP image."},
+        422: {"model": ErrorResponse, "description": "Invalid fields, or an empty/unreadable image."},
+        429: {"model": ErrorResponse, "description": "Too many requests from this client; see the Retry-After header."},
+    },
+)
 
 
 @router.post(
@@ -42,10 +176,19 @@ router = APIRouter(tags=["Diagnosis"])
         "and `POST /api/v1/sessions/{session_id}/feedback` says whether the solution worked "
         "(if not, a different one is generated). If the LLM judges that the input is not an "
         "equipment issue (`is_valid_issue: false`) nothing is stored and there is no session. "
+        "**Optionally attach a photo:** send the same request as `multipart/form-data` with the fields "
+        "`description`, `equipment_type` and `image` (JPEG/PNG/WebP). A vision model describes the photo and "
+        "its findings go into the SAME LLM call as the description, so the result is ONE diagnosis based on "
+        "both: `input_sources` is `[\"text\", \"image\"]` and `image_analysis` shows what the photo "
+        "contributed. If the photo is not equipment or image analysis is unavailable, the diagnosis goes "
+        "ahead on the description alone and `image_note` says why. A JSON request behaves exactly as before. "
         "Expect a few seconds per call (up to a couple of minutes if the model has to be loaded first)."
     ),
+    openapi_extra=_MULTIPART_DOCS,
     responses={
-        422: {"model": ErrorResponse, "description": "Invalid request body."},
+        413: {"model": ErrorResponse, "description": "(Multipart only) the photo is too large."},
+        415: {"model": ErrorResponse, "description": "(Multipart only) the photo is not a JPEG/PNG/WebP image."},
+        422: {"model": ErrorResponse, "description": "Invalid request body, or an empty/unreadable photo."},
         429: {"model": ErrorResponse, "description": "Too many requests from this client; see the Retry-After header."},
         502: {"model": ErrorResponse, "description": "The LLM returned an unusable response."},
         503: {
@@ -63,22 +206,7 @@ def diagnose(
     # `def` (not `async def`): embedding, vector search and the LLM call are all
     # blocking. FastAPI runs sync handlers in a thread pool, so the event loop stays free.
     result = diagnosis_service.diagnose(payload.description)
-
-    # Input that is not an equipment problem is answered but never stored (no ticket, no session),
-    # so it cannot pollute the history.
-    if not result.is_valid_issue:
-        return diagnose_response_for(result, ticket_id=None, session_id=None, attempt_number=None, max_attempts=None)
-
-    ticket, session, attempt = sessions.start(
-        description=payload.description, equipment_type=payload.equipment_type, result=result
-    )
-    return diagnose_response_for(
-        result,
-        ticket_id=ticket.id,
-        session_id=session.session_id,
-        attempt_number=attempt.attempt_number,
-        max_attempts=sessions.max_attempts,
-    )
+    return _respond(result, payload, sessions)
 
 
 @router.post(

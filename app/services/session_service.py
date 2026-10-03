@@ -26,7 +26,7 @@ from app.core.exceptions import (
     SessionNotFoundError,
 )
 from app.models.ticket import DiagnosisSession, SolutionAttempt, Ticket
-from app.schemas.diagnosis import DiagnoseResponse
+from app.schemas.diagnosis import DiagnoseResponse, ImageFindings
 from app.schemas.enums import DiagnosisBasis, ReviewStatus, SessionStatus
 from app.services.diagnosis_service import DiagnosisResult, DiagnosisService
 from app.services.llm_service import PreviousAttempt
@@ -66,9 +66,17 @@ def diagnose_response_for(
     session_id: str | None,
     attempt_number: int | None,
     max_attempts: int | None,
+    image_note: str | None = None,
 ) -> DiagnoseResponse:
-    """The API shape of one diagnosis (first attempt or follow-up)."""
+    """The API shape of one diagnosis (first attempt or follow-up).
+
+    ``input_sources`` says what the diagnosis was really based on: the description, plus the photo when
+    its findings went into the LLM call. ``image_note`` explains a photo that was attached but not used.
+    """
     return DiagnoseResponse(
+        input_sources=["text", "image"] if result.image_findings is not None else ["text"],
+        image_analysis=result.image_findings,
+        image_note=image_note,
         is_valid_issue=result.is_valid_issue,
         ticket_id=ticket_id,
         session_id=session_id,
@@ -144,6 +152,7 @@ class SessionService:
             original_description=description,
             equipment_type=(equipment_type or "").strip() or None,
             status=SessionStatus.IN_PROGRESS,
+            image_findings=result.image_findings.model_dump(mode="json") if result.image_findings else None,
         )
         attempt = _attempt_from(result, 1)
         session.attempts.append(attempt)
@@ -248,7 +257,10 @@ class SessionService:
         if before_new_attempt:
             before_new_attempt()
         previous = [PreviousAttempt(a.attempt_number, a.diagnosis, a.recommended_action) for a in session.attempts]
-        result = self._diagnosis.diagnose(session.original_description, previous)
+        # A session that began with a photo keeps weighing that same photo on every later attempt (only
+        # passed when there is one, so a text-only session calls diagnose() exactly as before).
+        photo = {"image_findings": ImageFindings.model_validate(session.image_findings)} if session.image_findings else {}
+        result = self._diagnosis.diagnose(session.original_description, previous, **photo)
 
         new_attempt = _attempt_from(result, latest.attempt_number + 1)
         session.attempts.append(new_attempt)

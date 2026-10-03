@@ -1,13 +1,33 @@
 """Request/response schemas for the diagnosis endpoints."""
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.enums import DiagnosisBasis, Severity
 from app.schemas.knowledge_base import SimilarCase
 
 
+class ImageFindings(BaseModel):
+    """What a vision model saw in a photo that was attached to a text diagnosis.
+
+    Handed to the LLM (so one diagnosis weighs the description AND the photo), returned to the client,
+    and kept with the diagnosis session so a later "try something else" still knows about the photo.
+    The photo itself is never stored.
+    """
+
+    description: str = Field(description="What the vision model says it sees: the equipment and any visible damage, in its own words.")
+    damage_detected: bool = Field(description="Whether the model sees damage, wear, leaks, corrosion or other abnormal conditions.")
+    severity: Severity = Field(description="The vision model's own rating of the visible condition (low when it looks normal).")
+    confidence: float | None = Field(
+        default=None, ge=0.0, le=1.0, description="The vision model's self-reported certainty (0-1); null if it gave no usable number."
+    )
+    model_name: str = Field(description="The vision model that produced these findings.")
+    provider: str = Field(description="Who runs the model (e.g. 'groq').")
+
+
 class DiagnoseRequest(BaseModel):
-    """Body of ``POST /api/v1/diagnose``."""
+    """Body of ``POST /api/v1/diagnose`` (JSON), and the validated form fields of its multipart variant."""
 
     description: str = Field(
         min_length=10,
@@ -122,12 +142,31 @@ class DiagnoseResponse(BaseModel):
     )
     attempt_number: int | None = Field(default=None, description="Which solution attempt this is within the session (1-based).")
     max_attempts: int | None = Field(default=None, description="How many different solutions the session offers before suggesting escalation.")
+    input_sources: list[Literal["text", "image"]] = Field(
+        default_factory=lambda: ["text"],
+        description=(
+            "Which inputs this diagnosis was actually based on: ['text'] for a description alone, "
+            "['text', 'image'] when a photo's findings were given to the same LLM call as well."
+        ),
+    )
+    image_analysis: ImageFindings | None = Field(
+        default=None,
+        description="What the vision model saw in the attached photo; set when `input_sources` includes 'image'.",
+    )
+    image_note: str | None = Field(
+        default=None,
+        description=(
+            "Set when a photo was attached but NOT used (it was not equipment, or image analysis was unavailable); "
+            "the diagnosis is then based on the description alone."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
             "examples": [
                 {
                     "is_valid_issue": True,
+                    "input_sources": ["text"],
                     "session_id": "3f9c1b2a7d5e4c60b1a2c3d4e5f60718",
                     "attempt_number": 1,
                     "max_attempts": 4,

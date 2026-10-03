@@ -3,6 +3,7 @@ import type { DiagnoseResponse } from '../types/api'
 import { BasisBanner } from './BasisBanner'
 import { ConfidenceMeters } from './ConfidenceMeters'
 import { FeedbackButtons } from './FeedbackButtons'
+import { PhotoFindings, PhotoNotUsedNotice } from './PhotoFindings'
 import { SeverityBadge } from './SeverityBadge'
 import { SimilarCaseCard } from './SimilarCaseCard'
 import { InfoIcon } from './icons'
@@ -54,6 +55,11 @@ export function ResultCard({ data, footer }: { data: DiagnoseResponse; footer?: 
         </div>
 
         <BasisBanner basis={data.diagnosis_basis} note={data.note} caseCount={data.similar_cases.length} />
+
+        {/* A photo was part of this diagnosis: say so, and keep what the AI saw in it visible. */}
+        {data.input_sources?.includes('image') && data.image_analysis && <PhotoFindings findings={data.image_analysis} />}
+        {/* A photo was attached but could not be used: never let it look as if it counted. */}
+        {data.image_note && <PhotoNotUsedNotice note={data.image_note} />}
 
         {failedCases.length > 0 && (
           <div

@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { diagnoseImage } from '../api/client'
 import { formatBytes } from '../lib/format'
+import { ACCEPTED_IMAGE_TYPES, MAX_IMAGE_BYTES, PHOTO_CAVEAT } from '../lib/photo'
 import type { ImageDiagnoseResponse } from '../types/api'
 import { ConfidenceBar } from './ConfidenceBar'
 import { ErrorBanner } from './ErrorBanner'
 import { SeverityBadge } from './SeverityBadge'
 import { AlertIcon, CheckCircleIcon, ImageIcon, InfoIcon, SpinnerIcon } from './icons'
 
-const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
-const MAX_BYTES = 5 * 1024 * 1024 // matches the backend default; the backend still enforces its own limit
-
-const CAVEAT = 'AI-generated visual assessment — not a substitute for professional inspection.'
+// Shared with the "Attach a photo" control on the main form (lib/photo.ts).
+const ACCEPTED_TYPES = ACCEPTED_IMAGE_TYPES
+const MAX_BYTES = MAX_IMAGE_BYTES
+const CAVEAT = PHOTO_CAVEAT
 
 type Status =
   | { phase: 'idle' }

@@ -84,13 +84,15 @@ class FakeLLMService(LLMService):
         self.calls: list[tuple[str, list]] = []  # (user_input, context_examples) per call
         self.previous_attempts_per_call: list[list] = []  # the "already tried" list handed over on each call
         self.failed_examples_per_call: list[list] = []  # the "did NOT work" knowledge-base cases on each call
+        self.image_findings_per_call: list = []  # the attached photo's findings on each call (None = text only)
         # Optional: successive answers for successive calls (the last one repeats), for multi-step flows.
         self.results: list[LLMDiagnosis] | None = None
 
-    def generate_diagnosis(self, user_input, context_examples, previous_attempts=(), failed_examples=()):
+    def generate_diagnosis(self, user_input, context_examples, previous_attempts=(), failed_examples=(), image_findings=None):
         self.calls.append((user_input, list(context_examples)))
         self.previous_attempts_per_call.append(list(previous_attempts))
         self.failed_examples_per_call.append(list(failed_examples))
+        self.image_findings_per_call.append(image_findings)
         if self.error:
             raise self.error
         if self.results:

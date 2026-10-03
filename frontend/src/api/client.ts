@@ -176,11 +176,25 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 }
 
 // --- Endpoints ------------------------------------------------------------------------------------
+/**
+ * Diagnose a description, optionally together with a photo. Without a photo this is the plain JSON request
+ * it always was; with one it is multipart/form-data and the backend analyses the photo and weighs it in the
+ * SAME diagnosis (the response says so in `input_sources`).
+ */
 export function diagnose(
   description: string,
   signal?: AbortSignal,
   equipmentType?: string,
+  photo?: File | null,
 ): Promise<DiagnoseResponse> {
+  if (photo) {
+    const form = new FormData()
+    form.append('description', description)
+    if (equipmentType) form.append('equipment_type', equipmentType)
+    form.append('image', photo)
+    // A photo adds a vision-model call before the diagnosis, so the long diagnosis timeout applies.
+    return request<DiagnoseResponse>('/api/v1/diagnose', { method: 'POST', form, timeoutMs: DIAGNOSE_TIMEOUT_MS, signal })
+  }
   return request<DiagnoseResponse>('/api/v1/diagnose', {
     method: 'POST',
     json: equipmentType ? { description, equipment_type: equipmentType } : { description },

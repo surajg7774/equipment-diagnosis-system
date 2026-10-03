@@ -37,6 +37,7 @@ from app.core.exceptions import (
     VisionResponseError,
     VisionUnavailableError,
 )
+from app.schemas.diagnosis import ImageFindings
 from app.schemas.enums import Severity
 from app.services.llm_service import normalize_confidence
 
@@ -79,6 +80,45 @@ class VisionService(ABC):
 
     def close(self) -> None:
         """Optional: release network resources at shutdown."""
+
+
+NOT_EQUIPMENT_PHOTO_NOTE = "Your photo was not used: it does not appear to show equipment. This diagnosis is based on your description only."
+
+
+def describe_photo_for_diagnosis(
+    vision: VisionService, image_bytes: bytes, media_type: str
+) -> tuple[ImageFindings | None, str | None]:
+    """Look at a photo that was attached to a text diagnosis; returns ``(findings, note)``.
+
+    ``findings`` is what the LLM will be told about the photo. When the photo cannot be used the
+    diagnosis must still go ahead on the description, so instead of failing the whole request this
+    returns ``(None, note)`` with an honest, user-facing reason: the photo is not equipment, or image
+    analysis is unavailable (switched off, rate limited, an outage, an unusable answer). The client
+    sees the note and ``input_sources: ["text"]``, so it is never presented as if the photo counted.
+
+    A photo the provider itself rejects (``InvalidImageError`` / ``ImageTooLargeError``) is the
+    caller's mistake, like any other bad upload, so those still propagate as 422 / 413.
+    """
+    try:
+        analysis = vision.analyze(image_bytes, media_type)
+    except (VisionUnavailableError, VisionResponseError) as exc:
+        logger.warning("attached_photo_not_used", extra={"reason": exc.code})
+        return None, f"Your photo was not used: {exc.message} This diagnosis is based on your description only."
+
+    if not analysis.is_equipment_photo:
+        logger.info("attached_photo_not_used", extra={"reason": "not_equipment"})
+        return None, NOT_EQUIPMENT_PHOTO_NOTE
+    return (
+        ImageFindings(
+            description=analysis.description,
+            damage_detected=analysis.damage_detected,
+            severity=analysis.severity,
+            confidence=analysis.confidence,
+            model_name=analysis.model_name,
+            provider=analysis.provider,
+        ),
+        None,
+    )
 
 
 # ---------------------------------------------------------------------------

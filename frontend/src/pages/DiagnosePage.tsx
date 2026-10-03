@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ApiError, diagnose } from '../api/client'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { ImageUploadCard } from '../components/ImageUploadCard'
+import { PhotoAttachment } from '../components/PhotoAttachment'
 import { InvalidResultCard } from '../components/ResultCard'
 import { ResultSkeleton } from '../components/ResultSkeleton'
 import { SessionFlow } from '../components/SessionFlow'
@@ -45,11 +46,12 @@ type Status =
 
 export function DiagnosePage() {
   const [text, setText] = useState('')
+  const [photo, setPhoto] = useState<File | null>(null) // optional: analysed together with the description
   const [equipmentType, setEquipmentType] = useState('')
   const [submitted, setSubmitted] = useState(false) // show client validation after the first attempt
   const [status, setStatus] = useState<Status>({ phase: 'idle' })
   const controllerRef = useRef<AbortController | null>(null)
-  const lastRequestRef = useRef<string | null>(null)
+  const lastRequestRef = useRef<{ description: string; photo: File | null } | null>(null)
   const resultRef = useRef<HTMLDivElement>(null)
 
   const loading = status.phase === 'loading'
@@ -70,14 +72,14 @@ export function DiagnosePage() {
   // 422s that were already shown on the field must not also appear as a banner.
   const showBanner = status.phase === 'error' && !serverFieldError
 
-  async function run(description: string) {
+  async function run(description: string, attached: File | null) {
     controllerRef.current?.abort()
     const controller = new AbortController()
     controllerRef.current = controller
-    lastRequestRef.current = description
+    lastRequestRef.current = { description, photo: attached } // so "Try again" re-sends the same photo too
     setStatus({ phase: 'loading' })
     try {
-      const data = await diagnose(description, controller.signal, equipmentType.trim() || undefined)
+      const data = await diagnose(description, controller.signal, equipmentType.trim() || undefined, attached)
       setStatus({ phase: 'success', data })
       // Bring the result into view on small screens where it renders below the form.
       requestAnimationFrame(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }))
@@ -91,12 +93,12 @@ export function DiagnosePage() {
     event.preventDefault()
     setSubmitted(true)
     if (loading || trimmedLength < MIN_LENGTH) return
-    // The description is sent exactly as typed; the equipment type travels separately.
-    void run(text.trim())
+    // The description is sent exactly as typed; the equipment type and the photo travel separately.
+    void run(text.trim(), photo)
   }
 
   function onRetry() {
-    if (lastRequestRef.current) void run(lastRequestRef.current)
+    if (lastRequestRef.current) void run(lastRequestRef.current.description, lastRequestRef.current.photo)
   }
 
   return (
@@ -155,6 +157,8 @@ export function DiagnosePage() {
             </div>
           </div>
 
+          <PhotoAttachment file={photo} onChange={setPhoto} disabled={loading} />
+
           <div>
             <label htmlFor="equipment-type" className="block text-sm font-semibold text-navy-900">
               Equipment type <span className="font-normal text-slate-500">(optional)</span>
@@ -189,7 +193,7 @@ export function DiagnosePage() {
             className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-accent-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-accent-700 disabled:cursor-not-allowed disabled:opacity-80"
           >
             {loading && <SpinnerIcon className="h-4 w-4" />}
-            {loading ? `Analyzing… ${elapsed}s` : 'Diagnose'}
+            {loading ? `${photo ? 'Analyzing photo and description' : 'Analyzing'}… ${elapsed}s` : 'Diagnose'}
           </button>
         </form>
 
