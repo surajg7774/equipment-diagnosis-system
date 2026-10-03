@@ -52,6 +52,69 @@ requests for opinions and nonsense are still rejected and not stored. (Verified 
 an electric toothbrush were diagnosed; "capital of France", a World Cup question and a poem request
 were rejected.) The LLM makes this judgement, so an odd borderline input can go either way.
 
+## Answers in your language (English, Hindi, Hinglish)
+
+Describe the problem in English, in Hindi (Devanagari) or in Hinglish (Hindi in Roman letters, mixed with English), and
+the diagnosis comes back in the same language and style. English in, English out, exactly as before.
+
+```
+"pump is leaking oil"          -> The most likely cause is a degraded or damaged mechanical shaft seal ...
+"पंप से तेल लीक हो रहा है"       -> पंप के सील, गैस्केट या ओ-रिंग में घिसाव या क्षति के कारण तेल लीक हो रहा है।
+"pump se oil leak ho raha hai" -> Pump ke shaft seal ya oil reservoir mein over-filling ke karan oil leak ho raha hai ...
+```
+
+**How:** there is no translation step. One paragraph in the LLM's system prompt (`SYSTEM_PROMPT` in
+`app/services/llm_service.py`) tells the model to detect the language and style of the report and write its diagnosis
+in the same one, keeping part names in their common form if needed, and a one-line reminder sits where the JSON is
+requested. The report reaches the model untranslated. The script is matched as well as the language: Hindi in Roman
+letters gets Hinglish in Roman letters, not Devanagari (the first wording of the prompt sometimes answered such a
+report in Devanagari; stating the script rule fixed that).
+
+**Nothing else changes:**
+
+* The JSON structure is identical. Only the text of `diagnosis` and `recommended_action` changes language; the field
+  names and the `severity` value (`low`/`medium`/`high`) stay English, because the parser only accepts those.
+* Severity and confidence are calculated exactly as before. The keyword heuristic still reads the user's report, and the
+  final severity is still the more severe of the heuristic and the LLM's own rating.
+* The text is stored and returned unchanged (UTF-8 all the way through the database and the API).
+
+**Measured** on the real stack (Groq `openai/gpt-oss-120b`, the real embedding model), with the three queries above:
+
+| | before the change | after the change |
+|---|---|---|
+| answer in the right language and style | 3 of 9 (English only; every Hindi and Hinglish answer came back in English) | 30 of 30 (10 runs per query) |
+| JSON structure identical to the English one | 9 of 9 | 30 of 30 |
+
+The earlier wordings scored lower on Hinglish: the first one 2 of 3 (one answer in Devanagari), adding the script rule
+5 of 6 (one answer in plain English), and only adding the reminder where the JSON is requested reached 10 of 10. That is why
+both exist. The model decides the language, so this is a measurement, not a guarantee.
+`pytest -m integration tests/test_integration_language.py` repeats the check against your configured model (about nine
+short calls; it needs a valid LLM key and spends a little quota).
+
+**Limits, all measured rather than assumed:**
+
+* **Hindi in Devanagari (and other non-Latin scripts) cannot be matched against the knowledge base.** The embedding
+  model is trained on English. It separates English problems well (unrelated ones scored 0.17 on average, none above the
+  0.50 "close match" bar) and Hinglish tolerably (0.43 on average, so its match scores deserve less trust), but not
+  Devanagari: unrelated Hindi problems scored 0.83 on average, and a Hindi report finds no close seed case (0.10 to 0.15).
+  A Devanagari report is therefore diagnosed from general knowledge (`diagnosis_basis: general_reasoning`, with the usual
+  note). Without a guard it was worse: after one thumbs-up on a Hindi pump ticket, an unrelated Hindi printer report matched
+  that learned pump fix at 0.85 and was grounded on it. Text that is mostly in another script is now compared only with the
+  seed records, never with learned or failed ones, and the near-verbatim-repeat check skips it (`embedder_can_judge` in
+  `app/services/diagnosis_service.py`; English and Hinglish are Latin script and keep the normal behaviour). A multilingual
+  embedding model would remove the limit, at the price of a larger model than the free 512 MB instance was sized for (not done).
+* **The keyword severity heuristic is English-only, as it always was.** Hinglish usually contains English words (`leak`),
+  so it still fires. A Devanagari report matches no keyword, so there the model's rating decides alone. In the 10 runs
+  above the same leak was rated `high` every time in English and Hinglish but `medium` in 9 of 10 Hindi runs (those had no
+  keyword floor and no matched past case either). Severity logic was deliberately not touched.
+* **Fixed texts stay English:** the server's notes (for example "No closely matching past case found"), the web app's labels
+  and buttons, and the photo-only analysis (`/diagnose-image`). Only the diagnosis text the LLM writes follows the user.
+* **Only English, Hindi and Hinglish were verified.** The instruction covers any language and the model is capable of
+  many, but other languages were not tested here.
+* Reports in other languages cost more model tokens (Devanagari most), but measured answers stayed far inside the budget:
+  at most about 240 completion tokens for a first Hindi answer and 378 for the longest Hinglish follow-up, against
+  `LLM_MAX_TOKENS` 1024 on Render.
+
 ## Iterative diagnosis: try a solution, give feedback, get the next one
 
 A diagnosis is no longer a single shot. Every valid `POST /api/v1/diagnose` starts a **diagnosis
@@ -685,7 +748,9 @@ attempts really reach the HTTP request sent to the model), thumbs up/down teachi
 (verified, provisional and failed records, the labelled prompt sections, and that a later similar request is steered
 away from a failed fix), the confirmation safeguard (the weight table, each way of confirming, upgrading the same
 record, retrieval ranking, prompt labels, legacy records, the kill switch and that every old response field is still
-there), the rate limiter (a fake clock moves time, so no test sleeps) and the statistics
+there), the answer language (the prompt carries the instruction in every kind of call, the JSON structure and the
+heuristic-plus-LLM severity are unchanged, and text the English-trained embedder cannot judge is never matched by
+similarity), the rate limiter (a fake clock moves time, so no test sleeps) and the statistics
 arithmetic and endpoint, and the API through FastAPI's `TestClient`. The integration tests
 check real retrieval and that the similarity threshold still separates known from unknown issues.
 
@@ -699,6 +764,9 @@ check real retrieval and that the similarity threshold still separates known fro
   >= 0.90) is weak by design: embeddings cannot tell a reworded cause from a different one (different causes
   scored up to 0.82, paraphrases as low as 0.74), so it only catches near-verbatim copies. See
   [Thumbs up and thumbs down](#thumbs-up-and-thumbs-down-teach-it-too).
+* **Reports in other scripts are not matched against learned fixes.** The embedding model is English-trained, so Hindi
+  in Devanagari is compared only with the seed records, never with fixes users or technicians taught the system, and a
+  Hindi fix cannot be found again by similarity. See [Answers in your language](#answers-in-your-language-english-hindi-hinglish).
 * **Thumbs-down only covers the first attempt.** The thumbs rate the ticket's own diagnosis, so the web app
   shows them on attempt 1 only, and a session's "No" does not record a failed fix: failures of attempts 2 and
   later are never learned. See [Iterative diagnosis](#iterative-diagnosis-try-a-solution-give-feedback-get-the-next-one).

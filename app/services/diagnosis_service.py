@@ -29,6 +29,7 @@ handle issues that match nothing in the knowledge base.
 import logging
 import math
 import time
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -58,6 +59,37 @@ REPEAT_NOTE = (
 # records that lack the key (pinned by a test against real ChromaDB), so they count as working fixes.
 WORKING_FIXES = {"outcome": {"$ne": KnowledgeOutcome.FAILED_FIX.value}}
 FAILED_FIXES = {"outcome": KnowledgeOutcome.FAILED_FIX.value}
+# Only the curated seed records: they carry no outcome at all, unlike every record added from feedback. Like $ne above,
+# Chroma's $nin keeps records that lack the key (pinned by a test against real ChromaDB).
+SEED_ONLY = {"outcome": {"$nin": [outcome.value for outcome in KnowledgeOutcome]}}
+
+# The embedding model is trained on English. It separates Latin-script text (English, and Hinglish, which is Hindi
+# in Roman letters) well, but it cannot tell texts in other scripts apart (Devanagari, Tamil, ...). Measured with
+# the real all-MiniLM-L6-v2: unrelated English problems score 0.17 on average (none above the 0.50 close-match bar),
+# unrelated Hindi (Devanagari) ones 0.83 (all of them above it), and two clearly different Hindi solutions 0.90.
+# So for such text a similarity says nothing: a learned Hindi record would be "a close match" for EVERY other Hindi
+# report (a pump fix matched a printer problem at 0.85), and two different Hindi solutions would look like a repeat.
+# Text that is mostly in another script is therefore never matched by similarity (see diagnose()).
+MIN_LATIN_SHARE = 0.5
+
+
+def latin_script_share(text: str) -> float:
+    """The share of ``text``'s letters written in Latin script (1.0 if it has no letters at all).
+
+    Combining marks count as part of their script: Devanagari vowel signs are marks, not letters, and leaving them
+    out would let a few English words outweigh a Hindi sentence. (NFC first, so an accented Latin letter is one
+    Latin character, not a letter plus a mark.)
+    """
+    letters = [c for c in unicodedata.normalize("NFC", text) if c.isalpha() or unicodedata.category(c).startswith("M")]
+    if not letters:
+        return 1.0
+    return sum(1 for c in letters if c.isascii() or unicodedata.name(c, "").startswith("LATIN")) / len(letters)
+
+
+def embedder_can_judge(text: str) -> bool:
+    """True if the English-trained embedder gives meaningful similarities for ``text`` (it is mostly Latin script)."""
+    return latin_script_share(text) >= MIN_LATIN_SHARE
+
 
 # A new attempt whose embedding is at least this similar to a failed one counts as a repeat.
 # This is a backstop for NEAR-VERBATIM repeats only, not a classifier: measured with the real
@@ -197,14 +229,26 @@ class DiagnosisService:
         return parse_chroma_results(raw)
 
     def find_similar_cases(self, description: str) -> list[SimilarCase]:
-        """Return the ``top_k`` most similar past cases with WORKING fixes (seed + verified), best first."""
-        return prefer_verified(self._search(self._embedder.embed([description])[0], WORKING_FIXES))
+        """Return the ``top_k`` most similar past cases with WORKING fixes (seed + verified), best first.
+
+        A report in a non-Latin script (e.g. Hindi in Devanagari) is only matched against the seed records: see
+        ``MIN_LATIN_SHARE``.
+        """
+        where = WORKING_FIXES if embedder_can_judge(description) else SEED_ONLY
+        return prefer_verified(self._search(self._embedder.embed([description])[0], where))
 
     def _repeats_a_ruled_out_solution(self, result: LLMDiagnosis, ruled_out: Sequence[tuple[str, str]]) -> bool:
-        """True if the new solution is (nearly) the same as a (root cause, fix) known not to work."""
-        texts = [solution_text(result.root_cause, result.recommended_fix)]
-        texts += [solution_text(root_cause, fix) for root_cause, fix in ruled_out]
-        vectors = self._embedder.embed(texts)
+        """True if the new solution is (nearly) the same as a (root cause, fix) known not to work.
+
+        Ruled-out solutions the embedder cannot judge (mostly non-Latin script, e.g. Hindi in Devanagari) are left
+        out of the comparison: it would call two different Hindi solutions a repeat. The prompt that lists what
+        already failed is what makes attempts differ; this is only a backstop for near-verbatim repeats.
+        """
+        new_text = solution_text(result.root_cause, result.recommended_fix)
+        older = [text for text in (solution_text(root_cause, fix) for root_cause, fix in ruled_out) if embedder_can_judge(text)]
+        if not older:
+            return False
+        vectors = self._embedder.embed([new_text, *older])
         return max(cosine_similarity(vectors[0], v) for v in vectors[1:]) >= REPEAT_SIMILARITY
 
     def diagnose(
@@ -224,7 +268,10 @@ class DiagnosisService:
 
         # 1. RETRIEVE (one embedding, two searches: fixes that worked, and fixes that did not)
         query_vector = self._embedder.embed([description])[0]
-        cases = prefer_verified(self._search(query_vector, WORKING_FIXES))
+        # A report in a non-Latin script cannot be matched by similarity (see MIN_LATIN_SHARE): it sees only the
+        # seed records (where it honestly finds no close match) and is never steered by learned or failed cases.
+        matchable = embedder_can_judge(description)
+        cases = prefer_verified(self._search(query_vector, WORKING_FIXES if matchable else SEED_ONLY))
         if not cases:
             raise KnowledgeBaseEmptyError(
                 "The knowledge base is empty. Run `python -m app.db.seed` to load it."
@@ -232,9 +279,11 @@ class DiagnosisService:
         # Only CLOSE failures count (the same bar as a close match): a failed fix for an unrelated
         # problem must never steer the model. They do not count as coverage either, so
         # retrieval_confidence and the basis below are about working fixes only.
-        failed_cases = [
-            c for c in self._search(query_vector, FAILED_FIXES) if c.similarity_score >= self._low_confidence_threshold
-        ]
+        failed_cases = (
+            [c for c in self._search(query_vector, FAILED_FIXES) if c.similarity_score >= self._low_confidence_threshold]
+            if matchable
+            else []
+        )
         retrieval_done = time.perf_counter()
         # The best REAL similarity, not the first case's: ranking a provisional fix lower must not lower this.
         retrieval_confidence = max(c.similarity_score for c in cases)
