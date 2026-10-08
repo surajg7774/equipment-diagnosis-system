@@ -117,62 +117,86 @@ short calls; it needs a valid LLM key and spends a little quota).
 
 ## The knowledge base: where the records come from
 
-The seed file `data/knowledge_base.json` holds **196 records in 19 equipment categories** (8 to 12 problems each): pump,
-motor, printer, HVAC, conveyor belt, generator, air compressor, boiler, refrigerator/chiller, CNC machine, forklift, UPS,
-laptop/desktop, router/network switch, CCTV, water purifier, washing machine, elevator and solar inverter. It started as
-28 hand-written examples. The other 168 were researched from public pages and rewritten in our own words (nothing is
-copy-pasted). Each record has a problem, a cause, a step-by-step fix, a severity and, where electricity, gas, pressure or
-moving parts are involved, a `safety_note`.
+The seed file `data/knowledge_base.json` holds **180 records in 19 equipment categories**, and **every one of them is
+documented**: a public page was read, and it states that problem, its cause and a remedy. Records were written only where
+a page like that exists, so the count follows the sources rather than a target, and a category can be small. The records
+are rewritten in our own words (nothing is copy-pasted) and each has a problem, a cause, a step-by-step fix, a severity,
+the source (`source_name`, `source_url`, `source_type: "documented"`) and, where electricity, gas, pressure or moving
+parts are involved, a `safety_note` taken from what the source says.
 
-**Every record says how far it can be trusted** (`source_type`):
+| Category | Records | Category | Records |
+|---|---|---|---|
+| forklift | 5 | pump | 6 |
+| generator | 6 | refrigerator/chiller | 6 |
+| printer | 7 | CCTV | 7 |
+| UPS | 8 | solar inverter | 8 |
+| HVAC | 9 | laptop/desktop | 9 |
+| conveyor belt | 10 | CNC machine | 10 |
+| motor | 11 | router/network switch | 12 |
+| washing machine | 12 | boiler | 13 |
+| water purifier | 13 | air compressor | 14 |
+| elevator | 14 | | |
 
-| `source_type` | Records | Meaning |
-|---|---|---|
-| `documented` | 128 | A public page (manufacturer support, government, established repair guide) was read, and it states that problem, its cause and a remedy. `source_name` and `source_url` point to it. The wording is ours. |
-| `general_knowledge` | 68 | No page was found that supports the record, so it is **unverified**. This includes records where a page lists causes but gives no fix. The web app labels these "Unverified source". |
+**Where the pages come from.** 122 records cite a manufacturer's support or manual page, 3 a government page, 5 a university
+extension page and 6 an industry body (the Hydraulic Institute). **44 cite a vendor or third-party blog** (maintenance-software
+firms, a boiler-service company, an RO retailer, a repair-guide site, an educational blog): no manufacturer, government or
+university page was found for those topics. Their `source_name` says so ("... vendor blog", "third-party repair guide"), and
+the audit file marks them. They are concentrated: the Haas CNC alarm records are all from one vendor blog, and so are 8 of 11 motor
+records, 7 of 12 washing-machine records (an LG guide from a repair-service site), 6 of 13 boiler, 5 of 13 water-purifier, 4 of 14 elevator and 4 of 5 forklift records.
 
-* "Documented" means the *cause and the main remedy* follow the cited page; a generic safety sentence ("isolate power
-  first") may be ours. It does **not** mean a domain expert reviewed it, and it is not a substitute for the maker's manual.
-  The pages were read on 2026-10-08; web pages move, so a link can go stale.
-* Of the original 28 records only 4 could be matched to a page that really supports them (cavitation, AC blowing warm
-  air, AC water leak, generator low-oil-pressure alarm); the other 24 stay `general_knowledge`.
+* **Audit file: [docs/kb_source_review.md](docs/kb_source_review.md).** One row per record: id, category, kind of source, the
+  source URL and a supporting line of fewer than 15 words copied from the page, so a reviewer can open the link and find it.
+  It is not loaded by the app. A test checks that every record has a row with the same link.
+* "Documented" means the *cause and the main remedy* follow the cited page. It does **not** mean a domain expert reviewed it,
+  and it is not a substitute for the maker's manual. Safety and "call a qualified technician" wording is included only where
+  the source says it. The pages were read on 2026-10-08 and 09; web pages move, so a link can go stale.
+* **What was removed.** The 24 original hand-written records that no page supports (for example pump bearing wear, shaft seal
+  leaks and the printer-not-on-the-network record) and the 68 records of the earlier expansion that had no source (for example the CNC
+  lathe chatter record) were deleted, not relabelled. Of the original 28, 4 remain (cavitation, AC blowing warm air, AC water leak, generator low-oil-pressure
+  alarm), with their text cut back to what the pages say. Where a page only named a cause or only listed things to
+  inspect (CCTV black or green screen, pump viscosity, CNC overtravel, forklift steering play), no record was written. Pages that
+  could not be read (blocked, empty shell, or timed out: Dell, Grundfos, Haas's own site, Schneider Electric FAQs, GE, Whirlpool, Otis)
+  were skipped, and nothing depends on them.
+* **Forklift stays short (5).** The OSHA, CCOHS and Toyota pages are inspection checklists, not cause-and-remedy guides.
 * `source_type` is about where the *content* comes from. It is separate from the older `source` field (`seed`, `verified`,
   `feedback`), which says how the record entered the knowledge base, and from the provisional/verified/failed logic, which
-  is unchanged. Records learned from feedback carry no source fields.
-* The similar-case cards show the source name as a link for documented records and a small "Unverified source" label for the
-  others; the safety note appears inside the expandable case details.
-* To list the unverified records for review: `python -c "import json;[print(r['id'],r['equipment_type'],'|',r['issue_description']) for r in json.load(open('data/knowledge_base.json',encoding='utf-8')) if r['source_type']=='general_knowledge']"`.
+  is unchanged. Records learned from feedback carry no source fields. The schema still accepts `general_knowledge` for
+  records added later, and the web app would label such a record "Unverified source", but the seed file has none and a test
+  fails if one is added.
+* The similar-case cards show the source name as a link; the safety note appears inside the expandable case details.
 
 **Loading.** The same two paths as before: `python -m app.db.seed` (idempotent: it upserts by id and removes seed records
 that left the file, never touching learned ones) and automatic seeding at startup when the store is empty. Startup does
 not re-seed a store that already has records, so on a host with a *persistent* disk run `python -m app.db.seed` after
 changing the file (Render's free tier has an ephemeral disk and re-seeds on every start).
 
-**Measured** (embeddings only, no LLM; `python scripts/eval_retrieval.py`; 31 English queries written before the new records
-existed, in `data/eval/retrieval_queries.json`; the three expected-category labels `refrigerator/chiller`, `laptop/desktop`
-and `router/network switch` were renamed afterwards to match the category names, the queries were not touched):
+**Measured** (embeddings only, no LLM; `python scripts/eval_retrieval.py`): 31 English queries written before the new records
+existed (`data/eval/retrieval_queries.json`, 10 of them name an expected record) plus 20 more frozen in git before any record
+of this version was written (`data/eval/retrieval_queries_added.json`), and 15 problems that are not in the knowledge base
+(`data/eval/negative_queries.json`). The 20 added queries were written by the same person who then read the pages, so they are
+friendlier than an independent test would be. No query was dropped (all 19 categories still exist) and no expected label
+was changed after seeing results; the 8 original queries whose expected record was deleted are reported as "expected record
+removed" and cannot hit.
 
-| | 28 records | 196 records |
-|---|---|---|
-| expected category among the top 3 | 10 of 31 (32%) | 31 of 31 (100%) |
-| expected record among the top 3 (the 10 queries that name one) | 10 of 10 | 10 of 10 |
-| mean similarity of the best match | 0.451 | 0.715 |
-| queries whose best match clears the 0.50 threshold | 9 of 31 | 29 of 31 |
+| | 28 records (6 categories) | 196 records (earlier, 68 unverified) | 180 records (documented only) |
+|---|---|---|---|
+| 31 original queries: expected category among the top 3 | 10 of 10 that it covers | 31 of 31 | 30 of 31 |
+| the 10 original queries on the 6 original categories: category / mean best-match similarity / at or above 0.50 | 10 / 0.675 / 9 | 10 / 0.685 / 9 | 10 / 0.566 / 6 |
+| expected record among the top 3 | 10 of 10 | 10 of 10 | 2 of 2 (8 of 10 expected records were deleted) |
+| 31 original queries: mean best-match similarity / at or above 0.50 | n/a / n/a | 0.715 / 29 | 0.648 / 25 |
+| 20 added queries: category among the top 3 / at or above 0.50 | n/a | 20 of 20 / 16 | 20 of 20 / 20 |
+| 15 unrelated problems that clear 0.50 | 1 | 2 | 0 |
 
-Most of that jump is simply the new categories existing (21 of the 31 queries target them), so the like-for-like figure is
-the second row: the original ten queries lose nothing (all ten still find their expected record, and their best-match similarity is unchanged to two decimals). The 0.50 threshold was
-re-checked and **left as it is**: of 15 problems that are *not* in the knowledge base (plus off-topic text,
-`data/eval/negative_queries.json`) 2 now clear 0.50 (a car engine matching a forklift-engine record at 0.51, a garage-door motor
-matching "motor hums but will not turn" at 0.64, both sensible near-matches), against 1 before. The 0.40 to 0.50 band
-now contains weak true matches (two of the 31 sit at 0.47 and 0.48 and are treated as no close match) and also several wrong
-ones (a ceiling fan, a vacuum cleaner and a dishwasher at 0.47 to 0.48), so lowering the threshold would admit junk.
+Removing the unsupported records made the original six categories answer less confidently (the bearing-noise, shaft-seal, printer
+network and diesel-start problems are no longer covered by a documented record). The one query that no longer finds its category is the
+lathe-chatter query. The 0.50 threshold was left as it is: no unrelated problem clears it now, and several of the weaker true
+matches fall just below it, so they are treated as "no close match" and answered from general reasoning, as designed.
 `pytest -m integration tests/test_integration_seed_quality.py` repeats these checks, and
-`python scripts/check_kb_duplicates.py` finds near-duplicate records (none at 0.90 or above; one pair that scored 0.91
-was merged).
+`python scripts/check_kb_duplicates.py` finds near-duplicate records (none at 0.90 or above; the closest pair is 0.88).
 
-**Cost.** Embedding 168 more records at startup takes about 7 more seconds on a normal PC (about 5 s to about 12.5 s to be
-ready) and about 4 MB more memory at peak (306 to 310 MB on Windows). Render's free instance has about 0.1 CPU, so its cold
-start will lengthen by much more than 7 seconds; this was not measured there.
+**Cost.** 180 records instead of 28: about 6 more seconds to be ready on a normal PC (5.3 s to 11.1 s) and about 5 MB more memory
+at peak (305 to 310 MB on Windows). Render's free instance has about 0.1 CPU, so its cold start will lengthen by much more than
+that; this was not measured there.
 
 ## Iterative diagnosis: try a solution, give feedback, get the next one
 
@@ -887,7 +911,7 @@ check real retrieval and that the similarity threshold still separates known fro
 * **Embeddings use the ONNX runtime, not PyTorch.** Same model weights, identical vectors (cosine
   similarity 1.00000, same similarity scores, so the 0.50 threshold is unchanged), but about 210 MB
   of RAM instead of about 750 MB. Texts are embedded 4 at a time: embedding all 28 records in one
-  batch made the process grow by about 260 MB (with the 4-at-a-time batches, 196 records cost only about 4 MB more than 28).
+  batch made the process grow by about 260 MB (with the 4-at-a-time batches, 180 records cost only about 5 MB more than 28).
 
 ### Swap points
 
@@ -909,7 +933,7 @@ app/
   models/     SQLAlchemy models        schemas/  Pydantic request/response models
   db/         engine/session, ChromaDB setup, seed script
   core/       settings, structured JSON logging, exceptions, in-memory rate limiter
-data/knowledge_base.json   196 seed records (128 documented, 68 general knowledge), see "The knowledge base"
+data/knowledge_base.json   180 seed records, all documented (each cites a public page), see "The knowledge base"
 tests/
 ```
 
@@ -976,8 +1000,8 @@ The frontend URL is not known until step 2, so deploy the backend first with a p
 
 ```bash
 curl https://<your-service>.onrender.com/health/live    # {"status":"alive"}
-curl https://<your-service>.onrender.com/health         # llm "ok", knowledge_base_size 196
-curl https://<your-service>.onrender.com/api/v1/stats   # usage counters; knowledge_base_size 196 on a fresh start
+curl https://<your-service>.onrender.com/health         # llm "ok", knowledge_base_size 180
+curl https://<your-service>.onrender.com/api/v1/stats   # usage counters; knowledge_base_size 180 on a fresh start
 ```
 
 Then check the rate limiter sees real visitors: send one diagnosis from your browser and look in the Render

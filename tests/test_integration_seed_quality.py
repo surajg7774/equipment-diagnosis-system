@@ -3,7 +3,7 @@
 No LLM and no Groq quota: embeddings only. Checks the two things the fake embedder cannot:
   * no two records are near-duplicates (cosine >= 0.90 on the text the system embeds), and
   * the frozen retrieval test sets (data/eval/) still retrieve what they should, and unrelated problems are not
-    grounded on a wrong case more often than measured when the knowledge base was expanded.
+    grounded on a wrong case more often than measured when the knowledge base was reduced to documented records.
 """
 
 import json
@@ -56,23 +56,26 @@ def test_no_two_records_are_near_duplicates(embedder):
 
 
 def test_the_frozen_queries_find_their_category_and_their_expected_record(embedder, collection):
-    queries = json.loads((EVAL / "retrieval_queries.json").read_text(encoding="utf-8"))
+    queries = json.loads((EVAL / "retrieval_queries.json").read_text(encoding="utf-8")) + json.loads(
+        (EVAL / "retrieval_queries_added.json").read_text(encoding="utf-8")
+    )
+    kb_ids = {r.id for r in load_records(KNOWLEDGE_BASE_PATH)}
     category_hits = strict = strict_total = grounded = 0
     for item in queries:
         top = _top3(embedder, collection, item["q"])
         category_hits += any(t.lower() == item["category"].lower() for _, t, _ in top)
         grounded += top[0][2] >= settings.low_confidence_threshold
-        if "expected_id" in item:
+        if item.get("expected_id") in kb_ids:  # a query whose expected record was removed is reported, never re-labelled
             strict_total += 1
             strict += any(i == item["expected_id"] for i, _, _ in top)
 
-    assert category_hits / len(queries) >= 0.90  # measured 31/31 when the knowledge base was expanded
-    assert strict == strict_total  # the original records are still found
-    assert grounded / len(queries) >= 0.85  # measured 29/31
+    assert category_hits / len(queries) >= 0.90  # measured 50/51 with the documented-only knowledge base
+    assert strict == strict_total  # the original records that were kept are still found (2 of 2)
+    assert grounded / len(queries) >= 0.80  # measured 45/51
 
 
 def test_unrelated_problems_are_rarely_grounded_on_a_wrong_case(embedder, collection):
     negatives = json.loads((EVAL / "negative_queries.json").read_text(encoding="utf-8"))
     grounded = [n["q"] for n in negatives if _top3(embedder, collection, n["q"])[0][2] >= settings.low_confidence_threshold]
 
-    assert len(grounded) <= 3, grounded  # measured 2 of 15, both sensible near-matches
+    assert len(grounded) <= 2, grounded  # measured 0 of 15 with the documented-only knowledge base
