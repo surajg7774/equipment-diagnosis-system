@@ -213,6 +213,15 @@ knowledge base took roughly 9 minutes to answer after the service had slept, and
 Locally this takes the 183-record start from 11.7 s to 3.8 s and peak memory from 312 MB to 268 MB. User queries still need the model
 loaded on a cold instance (about one second here).
 
+**Measured on Render's free instance** (2026-10-09, from outside, polling `/health`; the Render logs were not readable from here):
+
+| | seconds |
+|---|---|
+| Push until `/health` reported the new knowledge base (build + first start) | 132 (first 180-record version, no stored vectors, model downloaded at start: 564; 28-record version: 201) |
+| First answer from `/health/live` after 17 minutes idle (a real spin-down) | 63 (first 180-record version: more than 480, answered by about 530; one 28-record sample earlier: about 133) |
+
+The two changes were made together, so how much each one saved on Render was not separated.
+
 ## Iterative diagnosis: try a solution, give feedback, get the next one
 
 A diagnosis is no longer a single shot. Every valid `POST /api/v1/diagnose` starts a **diagnosis
