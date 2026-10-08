@@ -9,7 +9,6 @@ from app.schemas.review import KnowledgeBaseStats
 from app.services.llm_service import LLMDiagnosis
 from app.services.stats_service import build_stats, percentage
 from app.services.ticket_service import TicketService
-from tests.conftest import SEED_COUNT
 
 RELATED = "laptop battery drains quickly and the laptop shuts down suddenly"  # lands on seed cases -> similar_cases
 UNRELATED = "zqxv wplk jrmt"  # made-up words, ~0 similarity to everything -> general_reasoning
@@ -168,7 +167,7 @@ def test_stats_on_a_fresh_system_shows_only_the_seed_knowledge_base(client):
     assert body["total_diagnoses_performed"] == 0
     assert body["resolution"]["similar_cases_pct"] is None  # nothing to divide yet
     assert body["technician_verified_count"] == 0
-    assert body["knowledge_base_size"] == body["original_seed_count"] == SEED_COUNT
+    assert body["knowledge_base_size"] == body["original_seed_count"] == 28
     assert body["average_confidence"] == {"retrieval": None, "llm": None, "image": None}
 
 
@@ -228,8 +227,8 @@ def test_confirming_a_case_grows_the_verified_count_and_the_review_counts(client
     body = _stats(client)
 
     assert body["technician_verified_count"] == 2
-    assert body["original_seed_count"] == SEED_COUNT
-    assert body["knowledge_base_size"] == SEED_COUNT + 2  # seed + verified: the number retrieval can actually search
+    assert body["original_seed_count"] == 28
+    assert body["knowledge_base_size"] == 30  # seed + verified: the number retrieval can actually search
     assert body["review"] == {"pending": 1, "confirmed": 1, "corrected": 1}
 
 

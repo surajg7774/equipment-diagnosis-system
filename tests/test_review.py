@@ -269,9 +269,9 @@ def test_stats_split_the_knowledge_base_into_seed_and_verified_records(session, 
 
 
 def test_records_stored_before_the_source_field_existed_count_as_seed(seeded_collection, fake_embedder):
-    old = seeded_collection.get(ids=["KB-004"], include=["metadatas"])["metadatas"][0]
+    old = seeded_collection.get(ids=["KB-001"], include=["metadatas"])["metadatas"][0]
     old.pop("source", None)
-    seeded_collection.update(ids=["KB-004"], metadatas=[old])  # now has no 'source' at all
+    seeded_collection.update(ids=["KB-001"], metadatas=[old])  # now has no 'source' at all
 
     stats = KnowledgeBaseService(seeded_collection, fake_embedder).stats()
 

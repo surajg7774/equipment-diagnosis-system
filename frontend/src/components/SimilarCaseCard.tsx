@@ -2,47 +2,6 @@ import { toPercent } from '../lib/format'
 import { CheckCircleIcon, InfoIcon } from './icons'
 import type { SimilarCase } from '../types/api'
 
-/** Only real web links become links: the URL comes from data, so anything else is shown as plain text. */
-function isWebLink(url: string): boolean {
-  return /^https?:\/\//i.test(url)
-}
-
-/** Where the record comes from: a link for a documented one, a small "unverified" label for general knowledge. */
-function SourceLine({ item }: { item: SimilarCase }) {
-  if (item.source_type === 'documented' && item.source_name) {
-    return (
-      <p className="mt-1.5 text-xs text-slate-500" data-testid="source-documented">
-        Source:{' '}
-        {item.source_url && isWebLink(item.source_url) ? (
-          <a
-            href={item.source_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-medium text-accent-700 hover:underline"
-            data-testid="source-link"
-          >
-            {item.source_name}
-          </a>
-        ) : (
-          item.source_name
-        )}
-      </p>
-    )
-  }
-  if (item.source_type === 'general_knowledge') {
-    return (
-      <p
-        className="mt-1.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600"
-        title="No public source was found for this record, so it has not been checked against one."
-        data-testid="source-unverified"
-      >
-        Unverified source
-      </p>
-    )
-  }
-  return null
-}
-
 export function SimilarCaseCard({ item }: { item: SimilarCase }) {
   return (
     <li className="rounded-lg border border-slate-200 bg-white p-3.5 shadow-sm" data-testid="similar-case">
@@ -75,7 +34,6 @@ export function SimilarCaseCard({ item }: { item: SimilarCase }) {
         </p>
       )}
       <p className="mt-2 text-sm text-slate-800">{item.issue_description}</p>
-      <SourceLine item={item} />
       <details className="mt-2 text-sm">
         <summary className="cursor-pointer select-none text-xs font-medium text-accent-700 hover:underline">
           Root cause &amp; fix from this case
@@ -89,12 +47,6 @@ export function SimilarCaseCard({ item }: { item: SimilarCase }) {
             <dt className="text-xs font-semibold uppercase text-slate-500">Fix</dt>
             <dd>{item.recommended_fix}</dd>
           </div>
-          {item.safety_note && (
-            <div data-testid="safety-note">
-              <dt className="text-xs font-semibold uppercase text-amber-800">Safety</dt>
-              <dd>{item.safety_note}</dd>
-            </div>
-          )}
         </dl>
       </details>
     </li>

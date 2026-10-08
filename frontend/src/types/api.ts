@@ -46,15 +46,6 @@ export interface SimilarCase {
   verification?: FixVerification | null
   /** Total confirmation weight (an end user's click counts 1, a technician's review 2). */
   confirmation_count?: number | null
-  /**
-   * Where a seed record's content comes from: 'documented' = based on the cited public page (source_url),
-   * 'general_knowledge' = no source found (unverified). Absent/null on learned records and older backends.
-   */
-  source_type?: 'documented' | 'general_knowledge' | null
-  source_name?: string | null
-  source_url?: string | null
-  /** A safety warning for work on this problem, where one applies. */
-  safety_note?: string | null
 }
 
 /** What a vision model saw in a photo that was attached to a diagnosis. */

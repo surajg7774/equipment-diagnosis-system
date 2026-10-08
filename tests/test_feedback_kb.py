@@ -21,7 +21,7 @@ from app.schemas.enums import Severity
 from app.services.diagnosis_service import FAILED_FIXES, REPEAT_NOTE, WORKING_FIXES, DiagnosisService
 from app.services.llm_service import LLMDiagnosis, LLMService, build_messages
 from app.schemas.knowledge_base import SimilarCase
-from tests.conftest import KNOWLEDGE_BASE_PATH, SEED_COUNT
+from tests.conftest import KNOWLEDGE_BASE_PATH
 from tests.test_groq_service import completion, make_service
 
 FIRST = "pump making a loud grinding noise and leaking oil from the seal"
@@ -267,7 +267,7 @@ def test_seed_records_without_an_outcome_still_count_as_working_fixes(seeded_col
     seeds = seeded_collection.get(include=["metadatas"])["metadatas"]
     assert seeds and all("outcome" not in m for m in seeds)
 
-    assert len(seeded_collection.get(where=WORKING_FIXES)["ids"]) == SEED_COUNT
+    assert len(seeded_collection.get(where=WORKING_FIXES)["ids"]) == 28
     assert seeded_collection.get(where=FAILED_FIXES)["ids"] == []
     service = DiagnosisService(fake_embedder, seeded_collection, fake_llm, top_k=3, low_confidence_threshold=0.2)
     assert [c.source for c in service.find_similar_cases(FIRST)] == ["seed", "seed", "seed"]
@@ -416,7 +416,7 @@ def test_stats_count_verified_provisional_and_failed_fix_records(client):
     stats = client.get("/api/v1/stats").json()
 
     assert (stats["verified_fix_count"], stats["provisional_fix_count"], stats["failed_fix_count"]) == (1, 1, 2)
-    assert (stats["knowledge_base_size"], stats["original_seed_count"], stats["technician_verified_count"]) == (SEED_COUNT + 4, SEED_COUNT, 1)
+    assert (stats["knowledge_base_size"], stats["original_seed_count"], stats["technician_verified_count"]) == (32, 28, 1)
     kb = client.get("/api/v1/knowledge-base/stats").json()
     assert (kb["verified"], kb["provisional"], kb["failed"]) == (1, 1, 2)
 

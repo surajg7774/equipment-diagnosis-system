@@ -69,18 +69,17 @@ def full_pipeline(embedder, collection, real_llm):
 
 # --- retrieval with the real embedding model -------------------------------------------
 @pytest.mark.parametrize(
-    "query, expected_category",
+    "query, expected_top_ids",
     [
-        # Different wording from the KB text, same meaning: the point of embeddings. The knowledge base holds only
-        # documented records, so the check is on the equipment type of the closest record.
-        ("pump making loud grinding noise and leaking oil", "pump"),
-        ("my printer jammed and the paper got crumpled", "printer"),
-        ("AC is running but only blowing warm air", "HVAC"),
-        ("diesel genset will not crank, battery seems flat", "generator"),
+        # Different wording from the KB text, same meaning: the point of embeddings.
+        ("pump making loud grinding noise and leaking oil", {"KB-001", "KB-002"}),
+        ("my printer jammed and the paper got crumpled", {"KB-011"}),
+        ("AC is running but only blowing warm air", {"KB-016"}),
+        ("diesel genset will not crank, battery seems flat", {"KB-025"}),
     ],
 )
-def test_real_embeddings_retrieve_the_right_case(retrieval_only, query, expected_category):
-    assert retrieval_only.find_similar_cases(query)[0].equipment_type == expected_category
+def test_real_embeddings_retrieve_the_right_case(retrieval_only, query, expected_top_ids):
+    assert retrieval_only.find_similar_cases(query)[0].id in expected_top_ids
 
 
 def test_threshold_separates_known_issues_from_unknown_ones(retrieval_only):
@@ -92,7 +91,8 @@ def test_threshold_separates_known_issues_from_unknown_ones(retrieval_only):
         "AC is running but only blowing warm air",
         "motor smells like burning and is extremely hot",
     ]
-    unknown = [  # no documented record covers these (the lathe-chatter record was removed: no source states it)
+    unknown = [
+        "forklift hydraulic lift is slow and the mast jerks",
         "CNC machine spindle chatters when cutting aluminium",
         "what is the best recipe for chocolate cake",
     ]
@@ -127,7 +127,7 @@ def test_real_llm_diagnoses_a_known_issue_using_retrieved_cases(full_pipeline):
 
 
 def test_real_llm_handles_an_issue_with_no_close_match(full_pipeline):
-    result = full_pipeline.diagnose("CNC machine spindle chatters when cutting aluminium")
+    result = full_pipeline.diagnose("forklift hydraulic lift is slow and the mast jerks")
 
     assert result.diagnosis_basis is DiagnosisBasis.GENERAL_REASONING
     assert result.note == NO_MATCH_NOTE

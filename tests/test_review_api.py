@@ -6,8 +6,6 @@ exactly like production, so these tests can prove that a confirmed case is retri
 
 import pytest
 
-from tests.conftest import SEED_COUNT
-
 from app.schemas.enums import Severity
 from app.services.llm_service import LLMDiagnosis
 
@@ -207,7 +205,7 @@ def test_a_thumbs_up_adds_the_diagnosis_to_the_knowledge_base_as_provisional(cli
 # --- statistics -------------------------------------------------------------------------------------------------------------------------
 def test_stats_report_seed_versus_verified_records(client):
     stats = client.get("/api/v1/knowledge-base/stats").json()
-    assert stats["seed"] == SEED_COUNT and stats["verified"] == 0 and stats["total"] == SEED_COUNT
+    assert stats["seed"] == 28 and stats["verified"] == 0 and stats["total"] == 28
 
     a, b = _diagnose(client, REPORT_A)["ticket_id"], _diagnose(client, "pump seal leaking oil badly")["ticket_id"]
     client.post(f"/api/v1/tickets/{a}/confirm")
@@ -215,7 +213,7 @@ def test_stats_report_seed_versus_verified_records(client):
 
     stats = client.get("/api/v1/knowledge-base/stats").json()
     # Technician reviews are worth two confirmations, so both are verified (provisional is the new, additive key).
-    assert stats == {"total": SEED_COUNT + 2, "seed": SEED_COUNT, "verified": 2, "verified_confirmed": 1, "verified_corrected": 1, "failed": 0, "provisional": 0}
+    assert stats == {"total": 30, "seed": 28, "verified": 2, "verified_confirmed": 1, "verified_corrected": 1, "failed": 0, "provisional": 0}
 
 
 def test_openapi_documents_the_review_endpoints(client):

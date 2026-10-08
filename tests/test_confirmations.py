@@ -23,7 +23,6 @@ from app.schemas.enums import FixVerification, KnowledgeOutcome, Severity
 from app.schemas.knowledge_base import SimilarCase
 from app.services.diagnosis_service import PROVISIONAL_RANK_PENALTY, DiagnosisService, has_close_match, prefer_verified
 from app.services.llm_service import LLMDiagnosis, build_messages
-from tests.conftest import SEED_COUNT
 from tests.test_groq_service import completion as llm_completion
 from tests.test_groq_service import make_service as make_groq_llm
 
@@ -273,7 +272,7 @@ def test_a_record_written_before_the_safeguard_stays_verified(client, db_session
     stats = kb(client)
 
     assert (item["kb_verification"], item["confirmation_count"]) == (VERIFIED, 2)  # not demoted
-    assert (stats["verified"], stats["provisional"], stats["seed"]) == (1, 0, SEED_COUNT)  # `$ne` keeps it: it has no outcome at all
+    assert (stats["verified"], stats["provisional"], stats["seed"]) == (1, 0, 28)  # `$ne` keeps it: it has no outcome at all
     similar = diagnose(client)["similar_cases"]
     assert any(c["id"] == record_id and c["verification"] is None for c in similar)  # retrieved, and not tagged provisional
 
