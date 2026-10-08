@@ -10,7 +10,7 @@ from tests.conftest import KNOWLEDGE_BASE_PATH
 
 def test_knowledge_base_file_is_valid_and_sized_as_specified():
     records = load_records(KNOWLEDGE_BASE_PATH)
-    assert 25 <= len(records) <= 30
+    assert 150 <= len(records) <= 200
     # Every severity level and every required equipment family is represented.
     assert {r.severity.value for r in records} == {"low", "medium", "high"}
     assert {r.equipment_type for r in records} >= {

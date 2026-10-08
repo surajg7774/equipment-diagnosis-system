@@ -18,6 +18,21 @@ class KnowledgeBaseRecord(BaseModel):
     root_cause: str = Field(examples=["Worn or failed bearings."])
     recommended_fix: str = Field(examples=["Replace the bearings and re-lubricate."])
     severity: Severity
+    safety_note: str | None = Field(
+        default=None,
+        description="A safety warning for work on this problem (electrical, gas, pressure, rotating parts), where one applies.",
+    )
+    # Where the record's content comes from (seed file only; records learned from feedback have none of these).
+    # Not to be confused with `source` below, which says how the record got into the knowledge base.
+    source_type: Literal["documented", "general_knowledge"] | None = Field(
+        default=None,
+        description=(
+            "'documented' = the cause and fix come from the cited public page (source_url), written in our own words; "
+            "'general_knowledge' = no source was found, so it is unverified. Null for records learned from feedback."
+        ),
+    )
+    source_name: str | None = Field(default=None, description="Publisher and title of the cited page (documented records).")
+    source_url: str | None = Field(default=None, description="Public page the record is based on (documented records).")
     source: Literal["seed", "verified", "feedback"] = Field(
         default="seed",
         description=(

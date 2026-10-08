@@ -44,7 +44,7 @@ See [Deployment](#deployment-render--vercel) for hosting on Render + Vercel.
 ```
 
 **Any physical device is in scope, not just the knowledge base's categories.** The knowledge base is
-seeded with six equipment families (pump, motor, printer, HVAC, conveyor belt, generator), but those
+seeded with 19 equipment categories (see [The knowledge base](#the-knowledge-base-where-the-records-come-from)), but those
 are only *reference examples*: the LLM diagnoses anything else (a phone, a fridge, a car, a toothbrush)
 from general knowledge, and the response says so (`diagnosis_basis: general_reasoning`). The validity
 check asks only "is this a fault of a physical device or machine of any kind?"; trivia, chit-chat,
@@ -114,6 +114,65 @@ short calls; it needs a valid LLM key and spends a little quota).
 * Reports in other languages cost more model tokens (Devanagari most), but measured answers stayed far inside the budget:
   at most about 240 completion tokens for a first Hindi answer and 378 for the longest Hinglish follow-up, against
   `LLM_MAX_TOKENS` 1024 on Render.
+
+## The knowledge base: where the records come from
+
+The seed file `data/knowledge_base.json` holds **196 records in 19 equipment categories** (8 to 12 problems each): pump,
+motor, printer, HVAC, conveyor belt, generator, air compressor, boiler, refrigerator/chiller, CNC machine, forklift, UPS,
+laptop/desktop, router/network switch, CCTV, water purifier, washing machine, elevator and solar inverter. It started as
+28 hand-written examples. The other 168 were researched from public pages and rewritten in our own words (nothing is
+copy-pasted). Each record has a problem, a cause, a step-by-step fix, a severity and, where electricity, gas, pressure or
+moving parts are involved, a `safety_note`.
+
+**Every record says how far it can be trusted** (`source_type`):
+
+| `source_type` | Records | Meaning |
+|---|---|---|
+| `documented` | 128 | A public page (manufacturer support, government, established repair guide) was read, and it states that problem, its cause and a remedy. `source_name` and `source_url` point to it. The wording is ours. |
+| `general_knowledge` | 68 | No page was found that supports the record, so it is **unverified**. This includes records where a page lists causes but gives no fix. The web app labels these "Unverified source". |
+
+* "Documented" means the *cause and the main remedy* follow the cited page; a generic safety sentence ("isolate power
+  first") may be ours. It does **not** mean a domain expert reviewed it, and it is not a substitute for the maker's manual.
+  The pages were read on 2026-10-08; web pages move, so a link can go stale.
+* Of the original 28 records only 4 could be matched to a page that really supports them (cavitation, AC blowing warm
+  air, AC water leak, generator low-oil-pressure alarm); the other 24 stay `general_knowledge`.
+* `source_type` is about where the *content* comes from. It is separate from the older `source` field (`seed`, `verified`,
+  `feedback`), which says how the record entered the knowledge base, and from the provisional/verified/failed logic, which
+  is unchanged. Records learned from feedback carry no source fields.
+* The similar-case cards show the source name as a link for documented records and a small "Unverified source" label for the
+  others; the safety note appears inside the expandable case details.
+* To list the unverified records for review: `python -c "import json;[print(r['id'],r['equipment_type'],'|',r['issue_description']) for r in json.load(open('data/knowledge_base.json',encoding='utf-8')) if r['source_type']=='general_knowledge']"`.
+
+**Loading.** The same two paths as before: `python -m app.db.seed` (idempotent: it upserts by id and removes seed records
+that left the file, never touching learned ones) and automatic seeding at startup when the store is empty. Startup does
+not re-seed a store that already has records, so on a host with a *persistent* disk run `python -m app.db.seed` after
+changing the file (Render's free tier has an ephemeral disk and re-seeds on every start).
+
+**Measured** (embeddings only, no LLM; `python scripts/eval_retrieval.py`; 31 English queries written before the new records
+existed, in `data/eval/retrieval_queries.json`; the three expected-category labels `refrigerator/chiller`, `laptop/desktop`
+and `router/network switch` were renamed afterwards to match the category names, the queries were not touched):
+
+| | 28 records | 196 records |
+|---|---|---|
+| expected category among the top 3 | 10 of 31 (32%) | 31 of 31 (100%) |
+| expected record among the top 3 (the 10 queries that name one) | 10 of 10 | 10 of 10 |
+| mean similarity of the best match | 0.451 | 0.715 |
+| queries whose best match clears the 0.50 threshold | 9 of 31 | 29 of 31 |
+
+Most of that jump is simply the new categories existing (21 of the 31 queries target them), so the like-for-like figure is
+the second row: the original ten queries lose nothing (all ten still find their expected record, and their best-match similarity is unchanged to two decimals). The 0.50 threshold was
+re-checked and **left as it is**: of 15 problems that are *not* in the knowledge base (plus off-topic text,
+`data/eval/negative_queries.json`) 2 now clear 0.50 (a car engine matching a forklift-engine record at 0.51, a garage-door motor
+matching "motor hums but will not turn" at 0.64, both sensible near-matches), against 1 before. The 0.40 to 0.50 band
+now contains weak true matches (two of the 31 sit at 0.47 and 0.48 and are treated as no close match) and also several wrong
+ones (a ceiling fan, a vacuum cleaner and a dishwasher at 0.47 to 0.48), so lowering the threshold would admit junk.
+`pytest -m integration tests/test_integration_seed_quality.py` repeats these checks, and
+`python scripts/check_kb_duplicates.py` finds near-duplicate records (none at 0.90 or above; one pair that scored 0.91
+was merged).
+
+**Cost.** Embedding 168 more records at startup takes about 7 more seconds on a normal PC (about 5 s to about 12.5 s to be
+ready) and about 4 MB more memory at peak (306 to 310 MB on Windows). Render's free instance has about 0.1 CPU, so its cold
+start will lengthen by much more than 7 seconds; this was not measured there.
 
 ## Iterative diagnosis: try a solution, give feedback, get the next one
 
@@ -283,7 +342,7 @@ unusable rather than guessed at.
 
 ## Feedback loop: technicians improve the knowledge base
 
-The knowledge base does not have to stay frozen at its 28 seed examples. Every diagnosis is a
+The knowledge base does not have to stay frozen at its seed examples. Every diagnosis is a
 **ticket** that starts `pending`; a technician reviews it on the History page, and a reviewed case
 is added to ChromaDB, so the next *similar* report can retrieve it.
 
@@ -828,7 +887,7 @@ check real retrieval and that the similarity threshold still separates known fro
 * **Embeddings use the ONNX runtime, not PyTorch.** Same model weights, identical vectors (cosine
   similarity 1.00000, same similarity scores, so the 0.50 threshold is unchanged), but about 210 MB
   of RAM instead of about 750 MB. Texts are embedded 4 at a time: embedding all 28 records in one
-  batch made the process grow by about 260 MB.
+  batch made the process grow by about 260 MB (with the 4-at-a-time batches, 196 records cost only about 4 MB more than 28).
 
 ### Swap points
 
@@ -850,7 +909,7 @@ app/
   models/     SQLAlchemy models        schemas/  Pydantic request/response models
   db/         engine/session, ChromaDB setup, seed script
   core/       settings, structured JSON logging, exceptions, in-memory rate limiter
-data/knowledge_base.json   28 synthetic issue records
+data/knowledge_base.json   196 seed records (128 documented, 68 general knowledge), see "The knowledge base"
 tests/
 ```
 
@@ -917,8 +976,8 @@ The frontend URL is not known until step 2, so deploy the backend first with a p
 
 ```bash
 curl https://<your-service>.onrender.com/health/live    # {"status":"alive"}
-curl https://<your-service>.onrender.com/health         # llm "ok", knowledge_base_size 28
-curl https://<your-service>.onrender.com/api/v1/stats   # usage counters; knowledge_base_size 28 on a fresh start
+curl https://<your-service>.onrender.com/health         # llm "ok", knowledge_base_size 196
+curl https://<your-service>.onrender.com/api/v1/stats   # usage counters; knowledge_base_size 196 on a fresh start
 ```
 
 Then check the rate limiter sees real visitors: send one diagnosis from your browser and look in the Render
