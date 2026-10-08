@@ -181,9 +181,9 @@ removed" and cannot hit.
 | | 28 records (6 categories) | 196 records (earlier, 68 unverified) | 180 records (documented only) |
 |---|---|---|---|
 | 31 original queries: expected category among the top 3 | 10 of 10 that it covers | 31 of 31 | 30 of 31 |
-| the 10 original queries on the 6 original categories: category / mean best-match similarity / at or above 0.50 | 10 / 0.675 / 9 | 10 / 0.685 / 9 | 10 / 0.566 / 6 |
+| the 10 original queries on the 6 original categories: category / mean best-match similarity / at or above 0.50 | 10 / 0.675 / 9 | 10 / 0.685 / 9 | 10 / 0.554 / 5 |
 | expected record among the top 3 | 10 of 10 | 10 of 10 | 2 of 2 (8 of 10 expected records were deleted) |
-| 31 original queries: mean best-match similarity / at or above 0.50 | n/a / n/a | 0.715 / 29 | 0.648 / 25 |
+| 31 original queries: mean best-match similarity / at or above 0.50 | n/a / n/a | 0.715 / 29 | 0.644 / 24 |
 | 20 added queries: category among the top 3 / at or above 0.50 | n/a | 20 of 20 / 16 | 20 of 20 / 20 |
 | 15 unrelated problems that clear 0.50 | 1 | 2 | 0 |
 

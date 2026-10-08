@@ -71,7 +71,7 @@ def test_the_frozen_queries_find_their_category_and_their_expected_record(embedd
 
     assert category_hits / len(queries) >= 0.90  # measured 50/51 with the documented-only knowledge base
     assert strict == strict_total  # the original records that were kept are still found (2 of 2)
-    assert grounded / len(queries) >= 0.80  # measured 45/51
+    assert grounded / len(queries) >= 0.80  # measured 44/51
 
 
 def test_unrelated_problems_are_rarely_grounded_on_a_wrong_case(embedder, collection):
