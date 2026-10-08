@@ -11,7 +11,10 @@ services:
     runtime: python
     plan: free                  # 512 MB / 0.1 CPU. Spins down after 15 min idle (~1 min cold start).
     # If the repo root is not this folder, add:  rootDir: <path to the folder containing app/>
-    buildCommand: pip install -r requirements.txt
+    # The build also downloads the ~80 MB embedding model into ./models (EMBEDDING_MODEL_DIR below). Without this the
+    # model is downloaded on the first embedding after every cold start, because the free disk is wiped when the service
+    # sleeps. A failed download only prints a warning here; the app then downloads it at start-up as before.
+    buildCommand: pip install -r requirements.txt && python scripts/download_embedding_model.py
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     # Liveness only (no database / vector store / LLM checks): a Groq outage must not make Render
     # restart a healthy server. Use /health yourself for full diagnostics.
@@ -43,6 +46,8 @@ services:
         value: qwen/qwen3.8-27b
       - key: EMBEDDING_BACKEND  # "onnx" = no PyTorch, fits in 512 MB
         value: onnx
+      - key: EMBEDDING_MODEL_DIR    # where the build puts the model; the app finds it here at start-up (no download)
+        value: ./models
       - key: AUTO_SEED_ON_STARTUP   # refill the knowledge base on boot (the free disk is wiped on restart)
         value: "true"
       - key: MAX_SOLUTION_ATTEMPTS  # different solutions per problem before "escalate to a human technician"

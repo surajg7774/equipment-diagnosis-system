@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     #         `pip install sentence-transformers`. Honours EMBEDDING_MODEL_NAME.
     embedding_backend: Literal["onnx", "sentence-transformers"] = "onnx"
     embedding_model_name: str = "all-MiniLM-L6-v2"  # sentence-transformers backend only
+    # Folder for the ONNX model files (~80 MB). Empty = Chroma's default cache in the user's home directory.
+    # On Render set it to a folder inside the project (render.yaml: ./models) and download the model in the
+    # build step, so a cold start does not have to download it.
+    embedding_model_dir: Path | None = None
+    # Document vectors for the seed records, computed ahead of time by scripts/build_kb_vectors.py. Seeding uses a
+    # stored vector when the record's embedding text is unchanged and only embeds records that have none; this is
+    # what keeps a cold start on a 0.1 CPU host short. Missing file = embed everything (slower, still correct).
+    knowledge_base_vectors_path: Path | None = Path("data/knowledge_base_vectors.json")
 
     # --- Diagnosis behaviour ---------------------------------------------
     top_k: int = Field(default=3, ge=1, le=10, description="Similar cases to retrieve")

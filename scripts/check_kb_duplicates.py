@@ -20,7 +20,7 @@ path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().pare
 threshold = float(sys.argv[2]) if len(sys.argv) > 2 else 0.90
 settings = Settings()
 records = load_records(path)
-embedder = create_embedder(settings.embedding_backend, settings.embedding_model_name)
+embedder = create_embedder(settings.embedding_backend, settings.embedding_model_name, settings.embedding_model_dir)
 vectors = embedder.embed([record_to_embedding_text(r) for r in records])
 
 pairs = sorted(((cosine_similarity(vectors[i], vectors[j]), records[i], records[j]) for i, j in combinations(range(len(records)), 2)), key=lambda p: -p[0])

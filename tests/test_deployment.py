@@ -129,9 +129,18 @@ def test_startup_rebuilds_an_empty_knowledge_base_on_an_ephemeral_filesystem(tmp
 
     assert health["knowledge_base_size"] == len(load_records(KNOWLEDGE_BASE_PATH))  # auto-seeded
     assert health["status"] == "ok"
-    assert embedder.embed_calls >= 1
+    assert embedder.embed_calls == 0  # the committed, precomputed vectors were used: nothing was embedded at start-up
     # storage went where the environment-driven settings said
     assert (tmp_path / "tickets.db").exists() and (tmp_path / "chroma").is_dir()
+
+
+def test_startup_without_the_vectors_file_embeds_the_records_itself(tmp_path, monkeypatch):
+    embedder = _LoadableFakeEmbedder()
+    with _start_app(tmp_path, monkeypatch, embedder, knowledge_base_vectors_path=tmp_path / "missing.json") as client:
+        health = client.get("/health").json()
+
+    assert health["knowledge_base_size"] == len(load_records(KNOWLEDGE_BASE_PATH))  # slower, but just as complete
+    assert embedder.embed_calls >= 1
 
 
 def test_a_restart_with_surviving_data_does_not_reseed(tmp_path, monkeypatch):

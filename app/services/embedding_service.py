@@ -7,6 +7,8 @@ with vectors that point in similar directions, which is what lets us do
 """
 
 import logging
+import threading
+from pathlib import Path
 from typing import Protocol
 
 logger = logging.getLogger(__name__)
@@ -37,17 +39,34 @@ class OnnxEmbeddingService:
     # slower for this workload and keep the footprint flat.
     _BATCH_SIZE = 4
 
-    def __init__(self) -> None:
+    def __init__(self, model_dir: str | Path | None = None) -> None:
+        """``model_dir``: where the ~80 MB model files live. Default: Chroma's cache in the user's home.
+
+        On a host whose disk is wiped when the service sleeps (Render's free tier) point this at a folder
+        inside the project and download the model during the BUILD (``scripts/download_embedding_model.py``),
+        so a cold start only has to open the files instead of downloading them.
+        """
         self._embed_fn = None
+        self._model_dir = Path(model_dir) if model_dir else None
+        self._lock = threading.Lock()
 
     def load(self) -> None:
-        """Load the model (downloads ~80 MB from Chroma's CDN on the very first run)."""
-        if self._embed_fn is None:
+        """Load the model (downloads ~80 MB from Chroma's CDN if the files are not in the model folder yet)."""
+        if self._embed_fn is not None:
+            return
+        with self._lock:  # two threads asking at once must not both download or both build a session
+            if self._embed_fn is not None:
+                return
             from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 
-            logger.info("embedding_model_loading", extra={"model": "all-MiniLM-L6-v2", "backend": "onnx"})
+            if self._model_dir is not None:
+                ONNXMiniLM_L6_V2.DOWNLOAD_PATH = str(self._model_dir / ONNXMiniLM_L6_V2.MODEL_NAME)
+            logger.info(
+                "embedding_model_loading",
+                extra={"model": "all-MiniLM-L6-v2", "backend": "onnx", "folder": str(ONNXMiniLM_L6_V2.DOWNLOAD_PATH)},
+            )
             fn = ONNXMiniLM_L6_V2()
-            fn(["warm up"])  # forces the download + session creation now, not on the first request
+            fn(["warm up"])  # forces the download (if needed) + session creation now, not on the first request
             self._embed_fn = fn
             logger.info("embedding_model_loaded", extra={"model": "all-MiniLM-L6-v2", "backend": "onnx"})
 
@@ -94,8 +113,10 @@ class EmbeddingService:
         return vectors.tolist()
 
 
-def create_embedder(backend: str, model_name: str) -> "OnnxEmbeddingService | EmbeddingService":
-    """Build the embedder chosen by the EMBEDDING_BACKEND setting."""
+def create_embedder(
+    backend: str, model_name: str, model_dir: str | Path | None = None
+) -> "OnnxEmbeddingService | EmbeddingService":
+    """Build the embedder chosen by the EMBEDDING_BACKEND setting (``model_dir`` only applies to the ONNX backend)."""
     if backend == "sentence-transformers":
         return EmbeddingService(model_name)
-    return OnnxEmbeddingService()
+    return OnnxEmbeddingService(model_dir)

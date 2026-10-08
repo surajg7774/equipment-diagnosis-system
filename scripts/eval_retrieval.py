@@ -31,7 +31,7 @@ queries = json.loads((Path(args[1]) if len(args) > 1 else ROOT / "data" / "eval"
 settings = Settings()
 threshold = settings.low_confidence_threshold
 
-embedder = create_embedder(settings.embedding_backend, settings.embedding_model_name)
+embedder = create_embedder(settings.embedding_backend, settings.embedding_model_name, settings.embedding_model_dir)
 collection = get_or_create_collection(chromadb.EphemeralClient(), f"eval_{uuid.uuid4().hex}")
 records = load_records(kb_path)
 seed_knowledge_base(collection, embedder, records)

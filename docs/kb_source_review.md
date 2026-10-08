@@ -6,6 +6,7 @@ and the record paraphrases it. This file lets you spot-check: open the source UR
 - The quote is under 15 words and is copied from the page text as fetched (the check ignores case, curly quotes and dash types).
 - Source kind tells you how strong the source is. `VENDOR / third-party blog` rows were used only where no primary source was found.
 - Where the record has a safety note or a call-a-technician step, it is there because the source says it.
+- The four PSG Griswold pump records come from the pump maker's Centrifugal Pump Minute talks as republished by a trade magazine (the maker's own page returned 403); the source name says so.
 
 | Record | Category | Source kind | Source URL | Supporting line from the page |
 |---|---|---|---|---|
@@ -189,3 +190,6 @@ and the record paraphrases it. This file lets you spot-check: open the source UR
 | KB-202 | solar inverter | manufacturer | https://www.solaxpower.com/blogs/solar-system-not-working-troubleshooting.html | "verify the breaker between the controller and the battery is switched on" |
 | KB-203 | solar inverter | manufacturer | https://www.solaxpower.com/blogs/solar-system-not-working-troubleshooting.html | "Dust or bird droppings can cause localized losses." |
 | KB-204 | solar inverter | manufacturer | https://www.solaxpower.com/blogs/solar-system-not-working-troubleshooting.html | "Do not touch—contact an installer." |
+| KB-205 | pump | manufacturer | https://empoweringpumps.com/psg-griswold-centrifugal-pump-minute-troubleshooting-pump-is-noisy-or-vibrates | "the first thing you’d want to check is improper alignment" |
+| KB-206 | pump | manufacturer | https://empoweringpumps.com/psg-centrifugal-pump-minute-troubleshooting-bearings-run-hot | "the oil needs to be non-foaming oil or lubricant" |
+| KB-207 | pump | manufacturer | https://empoweringpumps.com/psg-griswold-centrifugal-pump-minute-troubleshooting-excessive-seal-leakage | "you may need to replace the shaft or the shaft sleeve" |
