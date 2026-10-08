@@ -8,7 +8,9 @@ database. Instead:
 FastAPI's ``dependency_overrides`` swaps these in for the production wiring.
 """
 
+import functools
 import hashlib
+import json
 import math
 import re
 import uuid
@@ -34,6 +36,8 @@ from app.services.llm_service import LLMDiagnosis, LLMService
 from app.services.vision_service import VisionAnalysis, VisionService
 
 KNOWLEDGE_BASE_PATH = Path(__file__).resolve().parent.parent / "data" / "knowledge_base.json"
+# How many records the seed file holds: tests that count "seed records" use this, not a literal that goes stale.
+SEED_COUNT = len(json.loads(KNOWLEDGE_BASE_PATH.read_text(encoding="utf-8")))
 # Wide enough that unrelated words almost never share a hash bucket, so a query of
 # made-up words reliably scores ~0 similarity against every knowledge-base record.
 _DIMS = 4096
@@ -56,6 +60,7 @@ class FakeEmbedder:
         return [self._embed_one(t) for t in texts]
 
     @staticmethod
+    @functools.lru_cache(maxsize=None)  # deterministic, and every test re-seeds the whole knowledge base
     def _embed_one(text: str) -> list[float]:
         vector = [0.0] * _DIMS
         for word in re.findall(r"[a-z]+", text.lower()):
