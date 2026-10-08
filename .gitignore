@@ -44,3 +44,6 @@ install.log
 Thumbs.db
 .idea/
 .vscode/
+
+# ONNX embedding model downloaded by scripts/download_embedding_model.py
+models/

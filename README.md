@@ -117,7 +117,7 @@ short calls; it needs a valid LLM key and spends a little quota).
 
 ## The knowledge base: where the records come from
 
-The seed file `data/knowledge_base.json` holds **180 records in 19 equipment categories**, and **every one of them is
+The seed file `data/knowledge_base.json` holds **183 records in 19 equipment categories**, and **every one of them is
 documented**: a public page was read, and it states that problem, its cause and a remedy. Records were written only where
 a page like that exists, so the count follows the sources rather than a target, and a category can be small. The records
 are rewritten in our own words (nothing is copy-pasted) and each has a problem, a cause, a step-by-step fix, a severity,
@@ -126,10 +126,10 @@ parts are involved, a `safety_note` taken from what the source says.
 
 | Category | Records | Category | Records |
 |---|---|---|---|
-| forklift | 5 | pump | 6 |
-| generator | 6 | refrigerator/chiller | 6 |
-| printer | 7 | CCTV | 7 |
-| UPS | 8 | solar inverter | 8 |
+| forklift | 5 | generator | 6 |
+| refrigerator/chiller | 6 | printer | 7 |
+| CCTV | 7 | UPS | 8 |
+| solar inverter | 8 | pump | 9 |
 | HVAC | 9 | laptop/desktop | 9 |
 | conveyor belt | 10 | CNC machine | 10 |
 | motor | 11 | router/network switch | 12 |
@@ -137,7 +137,7 @@ parts are involved, a `safety_note` taken from what the source says.
 | water purifier | 13 | air compressor | 14 |
 | elevator | 14 | | |
 
-**Where the pages come from.** 122 records cite a manufacturer's support or manual page, 3 a government page, 5 a university
+**Where the pages come from.** 125 records cite a manufacturer's support or manual page (3 of them are PSG Griswold pump talks as republished by a trade magazine, because the maker's own pages returned 403; their source name says so), 3 a government page, 5 a university
 extension page and 6 an industry body (the Hydraulic Institute). **44 cite a vendor or third-party blog** (maintenance-software
 firms, a boiler-service company, an RO retailer, a repair-guide site, an educational blog): no manufacturer, government or
 university page was found for those topics. Their `source_name` says so ("... vendor blog", "third-party repair guide"), and
@@ -178,25 +178,40 @@ friendlier than an independent test would be. No query was dropped (all 19 categ
 was changed after seeing results; the 8 original queries whose expected record was deleted are reported as "expected record
 removed" and cannot hit.
 
-| | 28 records (6 categories) | 196 records (earlier, 68 unverified) | 180 records (documented only) |
+| | 28 records (6 categories) | 196 records (earlier, 68 unverified) | 183 records (documented only) |
 |---|---|---|---|
 | 31 original queries: expected category among the top 3 | 10 of 10 that it covers | 31 of 31 | 30 of 31 |
-| the 10 original queries on the 6 original categories: category / mean best-match similarity / at or above 0.50 | 10 / 0.675 / 9 | 10 / 0.685 / 9 | 10 / 0.554 / 5 |
+| the 10 original queries on the 6 original categories: category / mean best-match similarity / at or above 0.50 | 10 / 0.675 / 9 | 10 / 0.685 / 9 | 10 / 0.559 / 6 |
 | expected record among the top 3 | 10 of 10 | 10 of 10 | 2 of 2 (8 of 10 expected records were deleted) |
-| 31 original queries: mean best-match similarity / at or above 0.50 | n/a / n/a | 0.715 / 29 | 0.644 / 24 |
+| 31 original queries: mean best-match similarity / at or above 0.50 | n/a / n/a | 0.715 / 29 | 0.646 / 25 |
 | 20 added queries: category among the top 3 / at or above 0.50 | n/a | 20 of 20 / 16 | 20 of 20 / 20 |
 | 15 unrelated problems that clear 0.50 | 1 | 2 | 0 |
 
-Removing the unsupported records made the original six categories answer less confidently (the bearing-noise, shaft-seal, printer
-network and diesel-start problems are no longer covered by a documented record). The one query that no longer finds its category is the
+Removing the unsupported records made the original six categories answer less confidently (the printer-network and diesel-start
+problems are no longer covered by a documented record; pump noise, hot bearings and shaft-seal leaks are covered again by three PSG
+Griswold records, though a query such as "pump making loud grinding noise and leaking oil" still scores only about 0.53 on its best match). The one query that no longer finds its category is the
 lathe-chatter query. The 0.50 threshold was left as it is: no unrelated problem clears it now, and several of the weaker true
 matches fall just below it, so they are treated as "no close match" and answered from general reasoning, as designed.
 `pytest -m integration tests/test_integration_seed_quality.py` repeats these checks, and
 `python scripts/check_kb_duplicates.py` finds near-duplicate records (none at 0.90 or above; the closest pair is 0.88).
 
-**Cost.** 180 records instead of 28: about 6 more seconds to be ready on a normal PC (5.3 s to 11.1 s) and about 5 MB more memory
-at peak (305 to 310 MB on Windows). Render's free instance has about 0.1 CPU, so its cold start will lengthen by much more than
-that; this was not measured there.
+**Start-up cost and the precomputed vectors.** Embedding the seed records at every start is cheap on a normal PC (180 records instead
+of 28 added about 6 s) but it is **not** cheap on Render's free instance (about 0.1 CPU): the first version of the 180-record
+knowledge base took roughly 9 minutes to answer after the service had slept, and was rolled back. Two things now keep the cold start short:
+
+* **Precomputed document vectors.** `data/knowledge_base_vectors.json` holds the vector of every record's embedding text
+  (`<equipment type>: <issue description>`) with a SHA-256 of that text. Seeding uses a stored vector when the hash of the record's
+  current text matches and embeds only the records that have none (a new or edited record, or a missing file), so the result is
+  the same as before, only faster. After editing `data/knowledge_base.json` run `python scripts/build_kb_vectors.py` (and
+  `--check` to test); a unit test fails while the file is out of date, and an opt-in integration test checks that the stored
+  vectors equal what the real model computes. The file is ignored if it was made with a different model.
+* **Model download at build time.** The ONNX embedding model (about 80 MB) was downloaded from Chroma's CDN the first time the app
+  embedded anything, i.e. on every cold start where the disk had been wiped. `EMBEDDING_MODEL_DIR=./models` and the build step
+  `python scripts/download_embedding_model.py` (see `render.yaml`) now put it inside the deployed project, so a start only opens the files.
+  A failed download at build time only prints a warning; the app then downloads it at start-up as before.
+
+Locally this takes the 183-record start from 11.7 s to 3.8 s and peak memory from 312 MB to 268 MB. User queries still need the model
+loaded on a cold instance (about one second here).
 
 ## Iterative diagnosis: try a solution, give feedback, get the next one
 
@@ -911,7 +926,7 @@ check real retrieval and that the similarity threshold still separates known fro
 * **Embeddings use the ONNX runtime, not PyTorch.** Same model weights, identical vectors (cosine
   similarity 1.00000, same similarity scores, so the 0.50 threshold is unchanged), but about 210 MB
   of RAM instead of about 750 MB. Texts are embedded 4 at a time: embedding all 28 records in one
-  batch made the process grow by about 260 MB (with the 4-at-a-time batches, 180 records cost only about 5 MB more than 28).
+  batch made the process grow by about 260 MB (with the 4-at-a-time batches, 180 records cost only about 5 MB more than 28; with stored vectors seeding embeds nothing).
 
 ### Swap points
 
@@ -933,7 +948,8 @@ app/
   models/     SQLAlchemy models        schemas/  Pydantic request/response models
   db/         engine/session, ChromaDB setup, seed script
   core/       settings, structured JSON logging, exceptions, in-memory rate limiter
-data/knowledge_base.json   180 seed records, all documented (each cites a public page), see "The knowledge base"
+data/knowledge_base.json   183 seed records, all documented (each cites a public page), see "The knowledge base"
+data/knowledge_base_vectors.json   their precomputed embedding vectors (scripts/build_kb_vectors.py)
 tests/
 ```
 
@@ -1000,8 +1016,8 @@ The frontend URL is not known until step 2, so deploy the backend first with a p
 
 ```bash
 curl https://<your-service>.onrender.com/health/live    # {"status":"alive"}
-curl https://<your-service>.onrender.com/health         # llm "ok", knowledge_base_size 180
-curl https://<your-service>.onrender.com/api/v1/stats   # usage counters; knowledge_base_size 180 on a fresh start
+curl https://<your-service>.onrender.com/health         # llm "ok", knowledge_base_size 183
+curl https://<your-service>.onrender.com/api/v1/stats   # usage counters; knowledge_base_size 183 on a fresh start
 ```
 
 Then check the rate limiter sees real visitors: send one diagnosis from your browser and look in the Render

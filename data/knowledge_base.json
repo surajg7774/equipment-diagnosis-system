@@ -2158,5 +2158,41 @@
     "source_name": "SolaX Power - Solar system not working: troubleshooting",
     "source_url": "https://www.solaxpower.com/blogs/solar-system-not-working-troubleshooting.html",
     "source_type": "documented"
+  },
+  {
+    "id": "KB-205",
+    "equipment_type": "pump",
+    "issue_description": "Centrifugal pump is noisy or vibrates excessively while running normally with the suction and discharge valves open.",
+    "root_cause": "Coupling misalignment between the pump and its driver (the easiest to find and fix); a partially clogged impeller, which also shows as reduced head or flow; a broken or bent impeller or shaft; a foundation that is not rigid; worn bearings; suction or discharge piping that is not anchored properly; or cavitation.",
+    "recommended_fix": "1) Check the coupling alignment between the pump and the driver and correct it. 2) Remove any obstruction from the impeller. 3) Inspect for excessive run-out of the shaft and impeller; if either is broken or bent, replace it. 4) Check that the foundation is rigid and that the suction and discharge piping is supported correctly. 5) Check the bearings for wear. 6) If cavitation is suspected, review the net positive suction head available (NPSHA) of the system.",
+    "severity": "medium",
+    "safety_note": null,
+    "source_name": "PSG Griswold (pump maker) Centrifugal Pump Minute, republished by Empowering Pumps (trade magazine) - Troubleshooting a noisy or vibrating pump",
+    "source_url": "https://empoweringpumps.com/psg-griswold-centrifugal-pump-minute-troubleshooting-pump-is-noisy-or-vibrates",
+    "source_type": "documented"
+  },
+  {
+    "id": "KB-206",
+    "equipment_type": "pump",
+    "issue_description": "Pump bearings run hot although the pump runs near its rated flow and head with the valves open.",
+    "root_cause": "Misalignment between the pump and the motor, which causes vibration and extra load on the bearings; improper lubrication (wrong oil, wrong oil level, or oil that foams and so does not lubricate the bearings); or fluid hotter than 250 F, which heats the bearings and calls for a bearing cooler.",
+    "recommended_fix": "1) Check the alignment between the pump and its driver. 2) Make sure the oil sump holds the correct, non-foaming oil at the right level; most pumps have a sight glass for this. 3) For service above 250 F consider installing a bearing cooler, and make sure its cooling water lines are working properly.",
+    "severity": "medium",
+    "safety_note": null,
+    "source_name": "PSG Griswold (pump maker) Centrifugal Pump Minute, republished by Empowering Pumps (trade magazine) - Troubleshooting: bearings run hot",
+    "source_url": "https://empoweringpumps.com/psg-centrifugal-pump-minute-troubleshooting-bearings-run-hot",
+    "source_type": "documented"
+  },
+  {
+    "id": "KB-207",
+    "equipment_type": "pump",
+    "issue_description": "Pump leaks excessively at the shaft seal (packing or mechanical seal) although flow and head are normal.",
+    "root_cause": "For a packed pump: the packing gland is not tightened properly, or the packing rings were installed with their slits lined up. For a mechanical seal: a score or nick on the shaft or shaft sleeve where the seal fits, or a worn or damaged seal (the seal flush system also affects how well a seal is maintained).",
+    "recommended_fix": "1) Packed pump: adjust the packing gland to reduce the leak (packing cannot be made to stop leaking completely, only controlled), then recheck the packing and make sure the rings are installed with their slits never aligned. 2) Mechanical seal: inspect the shaft or shaft sleeve under the seal for scores or nicks and replace it if damaged. 3) Replace a worn or damaged mechanical seal. 4) Look at the seal flush system and correct it so the seal is maintained properly.",
+    "severity": "medium",
+    "safety_note": null,
+    "source_name": "PSG Griswold (pump maker) Centrifugal Pump Minute, republished by Empowering Pumps (trade magazine) - Troubleshooting: excessive seal leakage",
+    "source_url": "https://empoweringpumps.com/psg-griswold-centrifugal-pump-minute-troubleshooting-excessive-seal-leakage",
+    "source_type": "documented"
   }
 ]

@@ -24,7 +24,7 @@ from app.core.exceptions import AppError
 from app.core.logging import request_id_ctx, setup_logging
 from app.core.rate_limit import RateLimiter
 from app.core.technician import log_technician_code_status
-from app.db.seed import seed_if_empty
+from app.db.seed import seed_if_empty, stored_vectors_for
 from app.db.session import create_db_engine, create_session_factory, init_db
 from app.models.ticket import Ticket
 from app.db.vector_store import create_chroma_client, get_or_create_collection
@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
     engine = create_db_engine(settings.database_url)
     init_db(engine)
 
-    embedder = create_embedder(settings.embedding_backend, settings.embedding_model_name)
+    embedder = create_embedder(settings.embedding_backend, settings.embedding_model_name, settings.embedding_model_dir)
     embedder.load()  # load now so the first request is not slow
 
     collection = get_or_create_collection(
@@ -65,8 +65,15 @@ async def lifespan(app: FastAPI):
         # tier) wiped chroma_db on restart. Rebuild it from the JSON file.
         if settings.auto_seed_on_startup:
             try:
-                report = seed_if_empty(collection, embedder, settings.knowledge_base_path)
-                logger.info("knowledge_base_auto_seeded", extra={"records": report.total_in_store if report else 0})
+                report = seed_if_empty(collection, embedder, settings.knowledge_base_path, stored_vectors_for(settings))
+                logger.info(
+                    "knowledge_base_auto_seeded",
+                    extra={
+                        "records": report.total_in_store if report else 0,
+                        "vectors_reused": report.vectors_reused if report else 0,
+                        "vectors_computed": report.vectors_computed if report else 0,
+                    },
+                )
             except Exception:  # keep the API up (health will show 0 records) rather than crash-loop
                 logger.exception("knowledge_base_auto_seed_failed")
         else:

@@ -15,7 +15,7 @@ import chromadb
 import pytest
 
 from app.core.config import Settings
-from app.db.seed import load_records, record_to_embedding_text, seed_knowledge_base
+from app.db.seed import load_records, load_stored_vectors, record_to_embedding_text, seed_knowledge_base
 from app.db.vector_store import get_or_create_collection
 from app.services.diagnosis_service import cosine_similarity
 from app.services.embedding_service import create_embedder
@@ -71,7 +71,7 @@ def test_the_frozen_queries_find_their_category_and_their_expected_record(embedd
 
     assert category_hits / len(queries) >= 0.90  # measured 50/51 with the documented-only knowledge base
     assert strict == strict_total  # the original records that were kept are still found (2 of 2)
-    assert grounded / len(queries) >= 0.80  # measured 44/51
+    assert grounded / len(queries) >= 0.80  # measured 45/51
 
 
 def test_unrelated_problems_are_rarely_grounded_on_a_wrong_case(embedder, collection):
@@ -79,3 +79,14 @@ def test_unrelated_problems_are_rarely_grounded_on_a_wrong_case(embedder, collec
     grounded = [n["q"] for n in negatives if _top3(embedder, collection, n["q"])[0][2] >= settings.low_confidence_threshold]
 
     assert len(grounded) <= 2, grounded  # measured 0 of 15 with the documented-only knowledge base
+
+
+def test_the_stored_vectors_match_what_the_real_model_computes_now(embedder):
+    """The committed knowledge_base_vectors.json must be what the live embedder would produce (cosine ~1)."""
+    records = load_records(KNOWLEDGE_BASE_PATH)
+    stored = load_stored_vectors(KNOWLEDGE_BASE_PATH.parent / "knowledge_base_vectors.json")
+    fresh = embedder.embed([record_to_embedding_text(r) for r in records])
+
+    worst = min(cosine_similarity(stored[r.id]["vector"], vector) for r, vector in zip(records, fresh))
+
+    assert worst > 0.9999, f"lowest cosine between stored and freshly computed vectors: {worst}"
